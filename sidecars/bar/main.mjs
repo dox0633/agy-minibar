@@ -4,7 +4,7 @@
  * 不修改 app.asar，不写宿主任何配置。
  */
 
-import { spawn } from 'node:child_process';
+import { exec, spawn } from 'node:child_process';
 import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
@@ -585,8 +585,27 @@ async function switchToAccount(email) {
         JSON.stringify({ email: target, updatedAt: Date.now() }), 'utf-8');
     } catch { /* 非关键 */ }
 
+    // 6) 重启 language_server 进程：LS 启动时从凭据管理器读 token，
+    //    不重启则内存中仍是旧账号（UI 显示不会变）。宿主会自动拉起新 LS。
+    try {
+      const killed = [];
+      const procs = await new Promise((resolve) => {
+        exec('tasklist /FI "IMAGENAME eq language_server.exe" /FO CSV /NH',
+          { encoding: 'utf8', timeout: 8000, windowsHide: true },
+          (err, stdout) => resolve(err ? [] : String(stdout || '')));
+      });
+      for (const line of procs.split(/\r?\n/)) {
+        const m = line.match(/"language_server\.exe","(\d+)"/);
+        if (m) {
+          const lpid = Number(m[1]);
+          try { process.kill(lpid); killed.push(lpid); } catch { /* 可能已退出 */ }
+        }
+      }
+      log('LS_RESTARTED', `killed=[${killed.join(',')}] -> host will respawn`);
+    } catch (e) { log('LS_RESTART_FAIL', e.message); }
+
     SW.activeEmail = target;
-    return { ok: true, email: target, note: 'credential swapped; LS picks it up on next auth check. If UI still shows old account, restart Antigravity.' };
+    return { ok: true, email: target, note: 'credential swapped + language_server restarted; new session uses ' + target };
   } catch (e) {
     log('SWITCH_FAIL', e.message);
     // 凭据写失败时严禁留下半状态：确认活跃凭据仍指向原账号

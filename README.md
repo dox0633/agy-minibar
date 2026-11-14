@@ -59,7 +59,7 @@ Google **Antigravity 2.0 桌面版**原生不显示任何会话状态——上�
 
 **原理**：Antigravity 桌面版把活跃凭据存放在 Windows 凭据管理器（`gemini:antigravity`）。MiniBar 通过 CredRead/CredWrite 直接 swap 凭据 blob，并同步 `google_accounts.json` 与 `active-account.json` 两个指针文件——全程不修改 app.asar。
 
-**切换生效时机**：凭据 swap 后，Language Server 在下一次鉴权检查时使用新 token（通常下一轮对话即生效）。若个别场景 UI 仍显示旧账号，重启一次 Antigravity 即可。
+**切换生效时机**：凭据 swap 成功后插件**自动重启 Language Server**（宿主秒级拉起新实例），新实例直接读取目标账号凭据——设置菜单、配额池、状态条全部跟随，端到端约 10 秒，无需重启整个应用。
 
 **安全说明**：
 
