@@ -366,8 +366,10 @@ class Cdp {
 
 let cdp = null;
 
-/** 账号列表快照：库内 + google_accounts.json + 当前活跃 + IDE 配额缓存（Kite） */
-function accountsSnapshot() {
+/** 账号列表快照：库内 + google_accounts.json + 当前活跃 + IDE 配额缓存（Kite）
+ *  realtime: { h5, wk } —— 当前账号的 LS 实时配额（与状态条同源）
+ */
+function accountsSnapshot(realtime) {
   const emails = new Set();
   if (SW.activeEmail) emails.add(SW.activeEmail);
   for (const a of loadLibrary().accounts) emails.add(a.email);
@@ -379,18 +381,27 @@ function accountsSnapshot() {
   // IDE 侧 Kite 缓存的各账号配额（有则带出，帮用户决定切哪个）
   let ideQuotas = {};
   try { ideQuotas = ideQuota.readIdeQuotaCache() || {}; } catch { ideQuotas = {}; }
+  const activeLower = String(SW.activeEmail || '').toLowerCase();
   return [...emails].map(e => {
-    const q = ideQuotas[String(e).toLowerCase()] || null;
+    const lower = String(e).toLowerCase();
+    const isCur = lower === activeLower;
+    const q = ideQuotas[lower] || null;
+    // 当前账号用 LS 实时配额（与状态条同源）；其它账号用 IDE 缓存并标注时效
+    const geminiWeekly = isCur && realtime && typeof realtime.wk === 'number'
+      ? realtime.wk
+      : (q ? q.models['gemini:weekly']?.remaining ?? null : null);
+    const gemini5h = isCur && realtime && typeof realtime.h5 === 'number'
+      ? realtime.h5
+      : (q ? q.models['gemini:5h']?.remaining ?? null : null);
     return {
       email: e,
       hasToken: Boolean(getAccount(e)),
-      isCurrent: String(e).toLowerCase() === String(SW.activeEmail || '').toLowerCase(),
-      ideQuota: q ? {
-        tier: q.tier,
-        geminiWeekly: q.models['gemini:weekly']?.remaining ?? null,
-        gemini5h: q.models['gemini:5h']?.remaining ?? null,
-        quotaUpdatedAt: q.updatedAt || 0,
-      } : null,
+      isCurrent: isCur,
+      geminiWeekly,
+      gemini5h,
+      quotaSource: isCur ? 'live' : (q ? 'cache' : 'none'),
+      quotaUpdatedAt: isCur ? Date.now() : (q ? q.updatedAt || 0 : 0),
+      tier: q ? q.tier : '',
     };
   });
 }
@@ -431,7 +442,7 @@ async function tick() {
       turns: st.turns,
       tokensM: st.tokensM,
       account: SW.activeEmail || '',
-      accounts: accountsSnapshot(),
+      accounts: accountsSnapshot(q),
       switchResult: SW.switchResult || null,
       captureResult: SW.captureResult || null,
       h5: q.h5,
@@ -620,6 +631,27 @@ async function switchToAccount(email) {
         }
       }
       log('LS_RESTARTED', `killed=[${killed.join(',')}] -> host will respawn`);
+      // 补写一次凭据（best-effort，借鉴 Antigravity-Manager）：旧 LS 被杀前可能
+      // 把旧 token 回写进凭据管理器，这次写入覆盖"写凭据→杀子进程"窗口内的回写，
+      // 确保宿主约 2 秒后拉起的新 LS 读到的一定是目标账号凭据。
+      try {
+        const acc2 = getAccount(target);
+        if (acc2 && acc2.token) {
+          const blobJson2 = JSON.stringify({
+            token: acc2.token,
+            auth_method: acc2.auth_method || 'consumer',
+            id_token_email: target,
+            writer_id: acc2.writer_id || '',
+          });
+          const blobDir2 = LIB_DIR_TEMP();
+          mkdirSync(blobDir2, { recursive: true });
+          const blobFile2 = join(blobDir2, 'pending-cred.json');
+          writeFileSync(blobFile2, blobJson2, 'utf-8');
+          writeActiveBlobFile(blobFile2);
+          try { unlinkSync(blobFile2); } catch {}
+          log('CRED_RE_ASSERT', target);
+        }
+      } catch (e) { log('CRED_RE_ASSERT_FAIL', e.message); }
     } catch (e) { log('LS_RESTART_FAIL', e.message); }
 
     SW.activeEmail = target;
@@ -689,7 +721,7 @@ async function serve() {
     app.api('/api/accounts', () => ({
       active: SW.activeEmail,
       switching: SW.switching,
-      accounts: accountsSnapshot(),
+      accounts: accountsSnapshot(S.last.payload && S.last.payload.h5 !== undefined ? { h5: S.last.payload.h5, wk: S.last.payload.wk } : null),
     }), 'GET');
     app.api('/api/switch', (d) => switchToAccount(String(d.email || '')), 'POST');
     // 打开 Google OAuth 登录窗口（浏览器）
