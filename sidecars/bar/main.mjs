@@ -461,6 +461,16 @@ async function tick() {
     if (r && r.convId && r.convId !== S.convId) S.convId = r.convId;
 
     // 上行指令通道（update 返回值带回 pending，单次 eval 完成，无竞态窗口）
+    SW.pendingLive = Boolean(st.live);
+    // 上轮遗留的延迟重启：生成已结束，现在执行
+    if (SW.deferredLsRestart && !SW.pendingLive && !SW.switching) {
+      SW.deferredLsRestart = false;
+      log('LS_RESTART_DEFERRED_EXEC');
+      try {
+        exec('taskkill /F /IM language_server.exe', { timeout: 8000, windowsHide: true }, () => {});
+        log('LS_RESTARTED', 'deferred kill issued');
+      } catch (e) { log('LS_RESTART_FAIL', e.message); }
+    }
     if (r && r.pendingSwitch) {
       const target = String(r.pendingSwitch);
       log('SWITCH_REQUEST', target);
@@ -505,7 +515,7 @@ async function loop() { for (;;) { await tick(); await new Promise(r => setTimeo
 
 /* ---------------- 账号热切换 ---------------- */
 
-const SW = { activeEmail: '', switching: false, panelApi: 0, lastError: '' };
+const SW = { activeEmail: '', switching: false, panelApi: 0, lastError: '', pendingLive: false, deferredLsRestart: false };
 
 /** 初始化：读当前凭据邮箱，并把当前账号备份进库 */
 function initAccount() {
@@ -587,6 +597,14 @@ async function switchToAccount(email) {
 
     // 6) 重启 language_server 进程：LS 启动时从凭据管理器读 token，
     //    不重启则内存中仍是旧账号（UI 显示不会变）。宿主会自动拉起新 LS。
+    //    若当前会话正在生成回复（transcript 20 秒内有写入），延迟到生成结束后
+    //    下一轮 tick 再重启，避免打断输出。
+    if (SW.pendingLive) {
+      log('LS_RESTART_DEFERRED', 'generation in progress; will retry next tick');
+      SW.deferredLsRestart = true;
+      SW.activeEmail = target;
+      return { ok: true, email: target, deferred: true, note: 'credential swapped; LS restart deferred until generation completes' };
+    }
     try {
       const killed = [];
       const procs = await new Promise((resolve) => {
