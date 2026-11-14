@@ -5,7 +5,7 @@
  */
 
 import { exec, spawn } from 'node:child_process';
-import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
 import { homedir } from 'node:os';
@@ -364,6 +364,38 @@ class Cdp {
   close() { this.dead = true; try { this.ws.close(); } catch {} }
 }
 
+/* ---------------- 本地实时配额记录 ----------------
+ * 每次账号成为"当前"时，把它的 LS 实时配额写入本地 JSON。
+ * 非当前账号的卡片优先展示这份记录（比 IDE 缓存新鲜），
+ * 7 天后视为过期（周额度按周重置，过期即无意义）。
+ */
+const LQ_FILE = join(homedir(), '.gemini', 'antigravity', 'sidecar_data', 'agy-minibar', 'live-quota.json');
+
+function loadLiveQuota() {
+  try { return JSON.parse(readFileSync(LQ_FILE, 'utf-8')); } catch { return {}; }
+}
+
+function saveLiveQuota(email, h5, wk) {
+  try {
+    const store = loadLiveQuota();
+    store[String(email).toLowerCase()] = { h5, wk, at: Date.now() };
+    const tmp = LQ_FILE + '.tmp';
+    writeFileSync(tmp, JSON.stringify(store, null, 2), 'utf-8');
+    renameSync(tmp, LQ_FILE);
+  } catch { /* 记录失败不影响主流程 */ }
+}
+
+function liveQuotaRecord(email) {
+  try {
+    const store = loadLiveQuota();
+    const hit = store[String(email).toLowerCase()];
+    if (!hit) return null;
+    // 超过 7 天的记录视为过期（周额度已重置，数值不可信）
+    if (Date.now() - hit.at > 7 * 86400000) return null;
+    return hit;
+  } catch { return null; }
+}
+
 let cdp = null;
 
 /** 账号列表快照：库内 + google_accounts.json + 当前活跃 + IDE 配额缓存（Kite）
@@ -386,21 +418,40 @@ function accountsSnapshot(realtime) {
     const lower = String(e).toLowerCase();
     const isCur = lower === activeLower;
     const q = ideQuotas[lower] || null;
-    // 当前账号用 LS 实时配额（与状态条同源）；其它账号用 IDE 缓存并标注时效
-    const geminiWeekly = isCur && realtime && typeof realtime.wk === 'number'
-      ? realtime.wk
-      : (q ? q.models['gemini:weekly']?.remaining ?? null : null);
-    const gemini5h = isCur && realtime && typeof realtime.h5 === 'number'
-      ? realtime.h5
-      : (q ? q.models['gemini:5h']?.remaining ?? null : null);
+    // 配额来源优先级：
+    //   当前账号 → LS 实时（与状态条同源）
+    //   其它账号 → 本地实时记录（切换时捕获，最多 7 天有效期）→ IDE 缓存 → 无
+    let geminiWeekly = null;
+    let gemini5h = null;
+    let quotaSource = 'none';
+    let quotaUpdatedAt = 0;
+    if (isCur && realtime && typeof realtime.wk === 'number') {
+      geminiWeekly = realtime.wk;
+      gemini5h = typeof realtime.h5 === 'number' ? realtime.h5 : null;
+      quotaSource = 'live';
+      quotaUpdatedAt = Date.now();
+    } else {
+      const local = liveQuotaRecord(lower);
+      if (local) {
+        geminiWeekly = local.wk;
+        gemini5h = local.h5;
+        quotaSource = 'captured';
+        quotaUpdatedAt = local.at;
+      } else if (q) {
+        geminiWeekly = q.models['gemini:weekly']?.remaining ?? null;
+        gemini5h = q.models['gemini:5h']?.remaining ?? null;
+        quotaSource = 'cache';
+        quotaUpdatedAt = q.updatedAt || 0;
+      }
+    }
     return {
       email: e,
       hasToken: Boolean(getAccount(e)),
       isCurrent: isCur,
       geminiWeekly,
       gemini5h,
-      quotaSource: isCur ? 'live' : (q ? 'cache' : 'none'),
-      quotaUpdatedAt: isCur ? Date.now() : (q ? q.updatedAt || 0 : 0),
+      quotaSource,
+      quotaUpdatedAt,
       tier: q ? q.tier : '',
     };
   });
@@ -449,6 +500,11 @@ async function tick() {
       wk: q.wk,
       live: st.live,
     };
+
+    // 记录当前账号的实时配额（幂等：值不变时磁盘写入由调用方规避——这里直接写，每分钟一次成本低）
+    if (typeof payload.wk === 'number' && payload.account) {
+      saveLiveQuota(payload.account, payload.h5, payload.wk);
+    }
 
     const ver = srcVer();
     // 通信桥：让页面端状态条能调 sidecar API（账号列表 / 切换 / 打开登录）

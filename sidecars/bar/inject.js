@@ -5,7 +5,7 @@
 //  2. 全局只允许一个 #agy-minibar-host；
 //  3. 只改文本与 SVG 属性，不做结构性增删。
 (() => {
-  const VER = 26;
+  const VER = 27;
   const HOST_ID = 'agy-minibar-host';
   if (window.__AGY_MINIBAR && window.__AGY_MINIBAR.ver === VER) return;
 
@@ -297,7 +297,10 @@
       mailWrap.appendChild(mail);
       if (typeof a.geminiWeekly === 'number') {
         const qTag = el('span', 'p-quota', '周' + Math.round(a.geminiWeekly) + '%');
-        if (a.quotaSource === 'cache') {
+        if (a.quotaSource === 'captured') {
+          const ageDays = a.quotaUpdatedAt ? Math.floor((Date.now() - a.quotaUpdatedAt) / 86400000) : null;
+          qTag.title = '切换时捕获的实时配额' + (ageDays !== null && ageDays > 0 ? '（' + (ageDays === 0 ? '今天' : ageDays + ' 天前') + '）' : '') + '；周额度 7 天重置';
+        } else if (a.quotaSource === 'cache') {
           const ageDays = a.quotaUpdatedAt ? Math.floor((Date.now() - a.quotaUpdatedAt) / 86400000) : null;
           qTag.title = 'IDE 缓存快照' + (ageDays !== null && ageDays > 0 ? '（' + ageDays + ' 天前）' : '') + '，非实时；周额度通常 7 天重置';
         } else {
