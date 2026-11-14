@@ -5,7 +5,7 @@
 //  2. 全局只允许一个 #agy-minibar-host；
 //  3. 只改文本与 SVG 属性，不做结构性增删。
 (() => {
-  const VER = 24;
+  const VER = 25;
   const HOST_ID = 'agy-minibar-host';
   if (window.__AGY_MINIBAR && window.__AGY_MINIBAR.ver === VER) return;
 
@@ -291,7 +291,7 @@
     }
     for (const a of accs) {
       const row = el('div', 'p-row' + (a.isCurrent ? ' cur' : ''));
-      const dot = el('span', 'p-dot' + (a.hasToken ? ' ok' : ''));
+      const dot = el('span', 'p-dot' + (a.isCurrent ? ' ok' : ''));
       const mailWrap = el('span', 'p-mailwrap');
       const mail = el('span', 'p-mail', a.email);
       mailWrap.appendChild(mail);
@@ -301,7 +301,7 @@
         qTag.title = 'IDE 缓存的 Gemini 周额度剩余';
         mailWrap.appendChild(qTag);
       }
-      let tagText = a.isCurrent ? '当前' : (a.hasToken ? '已存' : '需登录');
+      let tagText = a.isCurrent ? '当前' : '切号';
       if (switchState === 'pending' && switchingTarget === a.email) tagText = '切换中…';
       else if (switchState === 'ok' && switchingTarget === a.email) tagText = '完成';
       else if (switchState.startsWith('fail') && switchingTarget === a.email) tagText = '失败';
