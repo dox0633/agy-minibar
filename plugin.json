@@ -1,0 +1,31 @@
+{
+  "name": "agy-minibar",
+  "displayName": "Antigravity MiniBar",
+  "version": "1.1.4",
+  "description": "输入框正下方的一行极简实时状态条：上下文窗口环形图、会话 Token 合计、轮数、TPS、缓存命中率与 5h/周额度剩余。纯本地读取，零依赖，不改 app.asar。",
+  "author": {
+    "name": "agy-minibar contributors"
+  },
+  "homepage": "https://github.com/dox0633/agy-minibar",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dox0633/agy-minibar.git"
+  },
+  "license": "MIT",
+  "keywords": [
+    "antigravity",
+    "antigravity-2.0",
+    "sidecar",
+    "statusline",
+    "token",
+    "context-window",
+    "quota",
+    "monitor"
+  ],
+  "suggestedPrompts": [
+    "打开 MiniBar 面板",
+    "当前上下文占用多少",
+    "本会话用了多少 Token",
+    "5 小时额度还剩多少"
+  ]
+}

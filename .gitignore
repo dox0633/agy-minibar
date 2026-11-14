@@ -1,0 +1,24 @@
+# 系统自动忽略
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 日志与本地数据
+*.log
+sidecars/bar/minibar.log
+sidecars/**/.data/
+sidecars/**/*.log
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+*~
+
+# Node（本项目零依赖，但防止误提交）
+node_modules/
+package-lock.json
+
+# 临时
+*.tmp
+*.bak
