@@ -11,6 +11,25 @@
 
 
 
+
+## [1.2.4] - 2026-11-15
+
+### 修复
+
+- **非当前账号额度标签增加缓存时效提示**：悬停显示缓存快照的年龄
+  （如「3 天前」）与周额度 7 天重置说明——缓存值可能显著偏离当前实际剩余，
+  用户可据此判断可信度。
+
+### 说明（数据源边界）
+
+- 非当前账号的实时配额**无法获取**：Language Server 仅加载当前账号，
+  Google 消费者配额端点（`v1internal:*`）不对其它账号的 token 开放
+  （实测 `fetchAvailableModels` / `retrieveUserQuotaSummary` 均返回
+  PERMISSION_DENIED）。IDE 侧 Kite 缓存是唯一可行来源。
+- 当前账号不受影响：与状态条同源的实时值。
+
+[1.2.4]: https://github.com/dox0633/agy-minibar/compare/v1.2.3...v1.2.4
+
 ## [1.2.3] - 2026-11-14
 
 ### 变更
