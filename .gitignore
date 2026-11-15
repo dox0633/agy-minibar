@@ -3,6 +3,14 @@
 Thumbs.db
 desktop.ini
 
+# 运行时数据（含凭据，绝不入库）
+**/accounts.json
+**/accounts.json.tmp
+**/live-quota.json
+**/credswap.ps1
+**/pending-cred.json
+**/roundtrip.json
+**/*.lock
 # 日志与本地数据
 *.log
 sidecars/bar/minibar.log
