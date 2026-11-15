@@ -329,7 +329,14 @@ export function enrichSummaryWithSpeed(summary, speedIndex) {
 
   let latest = summary.latest;
   if (latest) {
-    const sp = speedIndex.get(latest.stepIndex) || null;
+    let sp = speedIndex.get(latest.stepIndex) || null;
+    if (!sp) {
+      // latest 可能是无 chatModel metadata 的步骤（如 PLANNER_RESPONSE）：
+      // 向前回溯最近一个有 speed 数据的主模型调用，避免 TPS/TTFT 误显示为空
+      for (let i = summary.series.length - 1; i >= 0 && !sp; i--) {
+        sp = speedIndex.get(summary.series[i].stepIndex) || null;
+      }
+    }
     latest = sp ? { ...latest, speed: sp } : latest;
   }
 

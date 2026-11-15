@@ -14,6 +14,24 @@
 
 
 
+
+## [1.2.7] - 2026-11-15
+
+### 修复
+
+- **TPS 回溯逻辑引用了不存在的数组字段**：v1.2.6 引入的「向前回溯最近
+  有速度数据的步骤」误用了 `summary.modelCalls`（它是计数数字而非数组），
+  导致回溯静默失败。改为遍历 `summary.series`（含 stepIndex 的最近 60 步）。
+
+### 补充说明（TPS 数据源行为）
+
+- transcript 的**最后一步**常是 `PLANNER_RESPONSE`（规划器输出），
+  这类步骤不产生 chatModel metadata——LS 的 speedIndex 里没有它。
+- 修复后：latest 无速度时向前回溯最近的主模型调用速度（TTFT/TPS 均适用），
+  静止会话仍显示 `—`（诚实原则不变）。
+
+[1.2.7]: https://github.com/dox0633/agy-minibar/compare/v1.2.6...v1.2.7
+
 ## [1.2.6] - 2026-11-15
 
 ### 修复
