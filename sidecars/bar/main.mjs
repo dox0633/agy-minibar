@@ -151,11 +151,17 @@ function scanIncrement(file) {
 
 function bases() {
   const raw = String(process.env.ANTIGRAVITY_LS_ADDRESS || '').trim().replace(/\/$/, '');
-  if (!raw) return [];
-  if (/^https?:\/\//i.test(raw)) return [raw];
-  const out = [`https://${raw}`, `http://${raw}`];
-  const port = raw.includes(':') ? raw.split(':').pop() : '';
-  if (/^\d+$/.test(port)) out.push(`https://127.0.0.1:${port}`, `http://127.0.0.1:${port}`);
+  const out = [];
+  if (raw) {
+    if (/^https?:\/\//i.test(raw)) out.push(raw);
+    else {
+      out.push(`https://${raw}`, `http://${raw}`);
+      const port = raw.includes(':') ? raw.split(':').pop() : '';
+      if (/^\d+$/.test(port)) out.push(`https://127.0.0.1:${port}`, `http://127.0.0.1:${port}`);
+    }
+  }
+  // 动态发现（LS 重启后端口变化时 env 已陈旧）
+  for (const b of discoverLsBases()) if (!out.includes(b)) out.push(b);
   return out;
 }
 
@@ -394,6 +400,46 @@ function liveQuotaRecord(email) {
     if (Date.now() - hit.at > 7 * 86400000) return null;
     return hit;
   } catch { return null; }
+}
+
+/* ---------------- LS 端口动态发现 ----------------
+ * 应用重启后 LS 端口会变，而 sidecar 的环境变量是启动时注入的（可能陈旧）。
+ * 通过枚举 language_server.exe 的监听端口 + 探测 GetUserStatus 的 401 特征
+ * 来发现当前活跃的 LS 地址（每轮 tick 都可执行，结果缓存 60 秒）。
+ */
+import { execSync } from 'node:child_process';
+let lsDiscoveryCache = { at: 0, bases: [] };
+
+function discoverLsBases() {
+  const now = Date.now();
+  if (now - lsDiscoveryCache.at < 60_000 && lsDiscoveryCache.bases.length) return lsDiscoveryCache.bases;
+  try {
+    const out = execSync('tasklist /FI "IMAGENAME eq language_server.exe" /FO CSV /NH',
+      { encoding: 'utf8', timeout: 6000, windowsHide: true });
+    const pids = [];
+    for (const line of out.split(/\r?\n/)) {
+      const m = line.match(/"language_server\.exe","(\d+)"/);
+      if (m) pids.push(Number(m[1]));
+    }
+    const ports = new Set();
+    for (const pid of pids) {
+      try {
+        const conns = execSync(
+          `powershell -NoProfile -Command "Get-NetTCPConnection -State Listen -OwningProcess ${pid} | Select-Object -ExpandProperty LocalPort"`,
+          { encoding: 'utf8', timeout: 10000, windowsHide: true });
+        for (const p of conns.split(/\r?\n/)) {
+          const port = Number(p.trim());
+          if (port > 0 && port < 65536) ports.add(port);
+        }
+      } catch { /* 单个进程失败继续 */ }
+    }
+    const bases = [];
+    for (const port of ports) {
+      bases.push(`https://localhost:${port}`, `https://127.0.0.1:${port}`, `http://127.0.0.1:${port}`);
+    }
+    if (bases.length) lsDiscoveryCache = { at: now, bases };
+    return bases;
+  } catch { return lsDiscoveryCache.bases || []; }
 }
 
 let cdp = null;
