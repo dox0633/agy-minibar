@@ -5,7 +5,7 @@
 //  2. 全局只允许一个 #agy-minibar-host；
 //  3. 只改文本与 SVG 属性，不做结构性增删。
 (() => {
-  const VER = 30;
+  const VER = 32;
   const HOST_ID = 'agy-minibar-host';
   if (window.__AGY_MINIBAR && window.__AGY_MINIBAR.ver === VER) return;
 
@@ -32,6 +32,83 @@
     .v.warn { color: var(--c-warn); }
     .v.bad { color: var(--c-bad); }
     .q-slash { opacity: .35; font-weight: normal; margin: 0 1px; }
+    .quota-cell { cursor: pointer; pointer-events: auto; }
+    .q-bar-wrap {
+      position: relative;
+      width: 52px;
+      height: 14px;
+      display: inline-flex;
+      align-items: center;
+      margin-left: 2px;
+      user-select: none;
+    }
+    .q-track {
+      width: 100%;
+      height: 3px;
+      background: var(--c-sep);
+      border-radius: 2px;
+      overflow: hidden;
+      position: relative;
+    }
+    .q-fill {
+      height: 100%;
+      background: rgba(255, 255, 255, 0.18);
+      border-radius: 2px;
+      transition: width .3s ease;
+    }
+    .q-ptr-h5 {
+      position: absolute;
+      top: 0px;
+      width: 0;
+      height: 0;
+      border-left: 3px solid transparent;
+      border-right: 3px solid transparent;
+      border-top: 4.5px solid #38bdf8;
+      filter: drop-shadow(0 0 2px #38bdf8);
+      transition: left .3s ease, border-top-color .3s ease;
+    }
+    .q-ptr-wk {
+      position: absolute;
+      bottom: 0px;
+      width: 0;
+      height: 0;
+      border-left: 3px solid transparent;
+      border-right: 3px solid transparent;
+      border-bottom: 4.5px solid #34d399;
+      filter: drop-shadow(0 0 2px #34d399);
+      transition: left .3s ease, border-bottom-color .3s ease;
+    }
+    .quota-card {
+      position: fixed;
+      width: 250px;
+      background: var(--c-panel);
+      border: 1px solid var(--c-sep);
+      border-radius: 10px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.55);
+      padding: 10px 12px;
+      font-family: "Google Sans Flex", system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+      z-index: 2147483150;
+      pointer-events: auto;
+      color: var(--c-val);
+      animation: qc-pop .18s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    @keyframes qc-pop {
+      from { opacity: 0; transform: translateY(4px) scale(0.97); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .qc-head { display: flex; align-items: center; justify-content: space-between; padding-bottom: 6px; border-bottom: 1px solid var(--c-sep); margin-bottom: 8px; }
+    .qc-title { font-size: 11.5px; font-weight: 600; display: flex; align-items: center; gap: 6px; color: var(--c-val); }
+    .qc-dot { width: 6px; height: 6px; border-radius: 50%; }
+    .qc-pool { font-size: 10px; color: var(--c-key); background: var(--c-hover); padding: 1px 6px; border-radius: 4px; font-family: monospace; }
+    .qc-row { margin-bottom: 8px; }
+    .qc-row:last-child { margin-bottom: 0; }
+    .qc-lbl-row { display: flex; align-items: center; justify-content: space-between; font-size: 11px; margin-bottom: 3px; }
+    .qc-lbl { display: flex; align-items: center; gap: 5px; color: var(--c-dim); }
+    .qc-val { font-family: monospace; font-weight: bold; }
+    .qc-bar-bg { width: 100%; height: 5px; background: var(--c-hover); border-radius: 3px; overflow: hidden; }
+    .qc-bar-fill { height: 100%; border-radius: 3px; transition: width .3s ease; }
+    .qc-time { font-size: 10px; color: var(--c-key); display: flex; justify-content: space-between; margin-top: 3px; }
+    .qc-foot { border-top: 1px solid var(--c-sep); margin-top: 8px; padding-top: 6px; display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: var(--c-dim); }
     .pulse-dot {
       display: inline-block;
       width: 5px; height: 5px;
@@ -288,8 +365,131 @@
   sep(); bar.appendChild(gCtx);
   sep(); const cCache = cell('缓存命中', I_CACHE, 'ok');
   sep(); const cQuota = cell('额度', I_QUOTA, '');
+  cQuota.g.classList.add('quota-cell');
+  cQuota.g.addEventListener('mouseenter', showQuotaCard);
+  cQuota.g.addEventListener('mouseleave', scheduleCloseQuotaCard);
   const cErr = el('span', 'err-badge');
   bar.appendChild(cErr);
+
+  /* ---- 额度对向标尺与悬停卡片 ---- */
+  const COLOR_H5_DEF = '#38bdf8'; // 天蓝 (5h)
+  const COLOR_WK_DEF = '#34d399'; // 翡翠绿 (周额度)
+
+  function getQuotaColor(val, def) {
+    if (typeof val !== 'number' || !isFinite(val)) return def;
+    if (val < 20) return '#ef4444';
+    if (val < 40) return '#f59e0b';
+    return def;
+  }
+
+  let quotaCard = null;
+  let cardTimer = null;
+  let lastQuotaData = null;
+
+  function showQuotaCard() {
+    if (cardTimer) { clearTimeout(cardTimer); cardTimer = null; }
+    if (!quotaCard) {
+      quotaCard = el('div', 'quota-card');
+      root.appendChild(quotaCard);
+      quotaCard.addEventListener('mouseenter', () => {
+        if (cardTimer) { clearTimeout(cardTimer); cardTimer = null; }
+      });
+      quotaCard.addEventListener('mouseleave', () => {
+        scheduleCloseQuotaCard();
+      });
+    }
+    renderQuotaCard();
+    placeQuotaCard();
+  }
+
+  function scheduleCloseQuotaCard() {
+    if (cardTimer) clearTimeout(cardTimer);
+    cardTimer = setTimeout(() => {
+      closeQuotaCard();
+    }, 150);
+  }
+
+  function closeQuotaCard() {
+    if (quotaCard) {
+      try { quotaCard.remove(); } catch (_) {}
+      quotaCard = null;
+    }
+  }
+
+  function placeQuotaCard() {
+    if (!quotaCard || !cQuota.g) return;
+    const r = cQuota.g.getBoundingClientRect();
+    quotaCard.style.visibility = 'hidden';
+    quotaCard.style.display = 'block';
+    requestAnimationFrame(() => {
+      if (!quotaCard) return;
+      const cw = quotaCard.offsetWidth || 250;
+      const ch = quotaCard.offsetHeight || 150;
+      let left = r.left + r.width / 2 - cw / 2;
+      let top = r.top - ch - 8;
+      if (top < 8) top = r.bottom + 8;
+      if (left < 8) left = 8;
+      if (left + cw > window.innerWidth - 8) left = window.innerWidth - 8 - cw;
+      quotaCard.style.left = Math.round(left) + 'px';
+      quotaCard.style.top = Math.round(top) + 'px';
+      quotaCard.style.visibility = 'visible';
+    });
+  }
+
+  function renderQuotaCard() {
+    if (!quotaCard || !lastQuotaData) return;
+    const x = lastQuotaData;
+    const h5Val = typeof x.h5 === 'number' && isFinite(x.h5) ? Math.round(x.h5) : null;
+    const wkVal = typeof x.wk === 'number' && isFinite(x.wk) ? Math.round(x.wk) : null;
+    const colH5 = getQuotaColor(h5Val, COLOR_H5_DEF);
+    const colWk = getQuotaColor(wkVal, COLOR_WK_DEF);
+
+    const poolName = x.model ? (x.model.length > 18 ? x.model.slice(0, 16) + '…' : x.model) : '当前配额池';
+
+    let minVal = 100;
+    if (h5Val !== null) minVal = Math.min(minVal, h5Val);
+    if (wkVal !== null) minVal = Math.min(minVal, wkVal);
+    const statusText = minVal < 20 ? '<span style="color:#ef4444;font-weight:600;">额度紧张</span>'
+      : (minVal < 40 ? '<span style="color:#f59e0b;font-weight:600;">注意消耗</span>'
+      : '<span style="color:#34d399;font-weight:600;">充裕可用</span>');
+
+    const h5ResetStr = x.h5Reset ? `约 ${x.h5Reset} 后充值` : '充值倒计时暂无';
+    const wkResetStr = x.wkReset ? `约 ${x.wkReset} 后重置` : '重置倒计时暂无';
+
+    quotaCard.innerHTML = `
+      <div class="qc-head">
+        <div class="qc-title">
+          <span class="qc-dot" style="background:${colH5};"></span>
+          <span>配额使用明细</span>
+        </div>
+        <span class="qc-pool">${poolName}</span>
+      </div>
+      <div class="qc-row">
+        <div class="qc-lbl-row">
+          <span class="qc-lbl"><span style="color:${colH5}">▼</span> 5 小时额度</span>
+          <span class="qc-val" style="color:${colH5}">${h5Val !== null ? h5Val + '%' : '无限制'}</span>
+        </div>
+        <div class="qc-bar-bg">
+          <div class="qc-bar-fill" style="width:${h5Val !== null ? h5Val : 100}%;background:${colH5};"></div>
+        </div>
+        <div class="qc-time"><span>重置周期</span><span>${h5ResetStr}</span></div>
+      </div>
+      <div class="qc-row">
+        <div class="qc-lbl-row">
+          <span class="qc-lbl"><span style="color:${colWk}">▲</span> 每周额度</span>
+          <span class="qc-val" style="color:${colWk}">${wkVal !== null ? wkVal + '%' : '无限制'}</span>
+        </div>
+        <div class="qc-bar-bg">
+          <div class="qc-bar-fill" style="width:${wkVal !== null ? wkVal : 100}%;background:${colWk};"></div>
+        </div>
+        <div class="qc-time"><span>重置周期</span><span>${wkResetStr}</span></div>
+      </div>
+      <div class="qc-foot">
+        <span>状态: ${statusText}</span>
+        <span>账号: ${x.account ? shortEmail(x.account) : '—'}</span>
+      </div>
+    `;
+  }
 
   /* ---- 账号项（可点击，弹账号面板）----
    * 免 fetch 通道：accounts 数据由 sidecar 在 payload 下行；点击把
@@ -409,6 +609,7 @@
   function outsideClose(e) {
     if (panel && !host.contains(e.target)) closePanel();
     else if (panel) document.addEventListener('mousedown', outsideClose, { once: true });
+    if (quotaCard && !host.contains(e.target)) closeQuotaCard();
   }
   function closePanel() {
     if (panel) { try { panel.remove(); } catch (_) {} panel = null; }
@@ -471,7 +672,7 @@
   }
 
   let raf = 0;
-  const schedule = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; place(); }); };
+  const schedule = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; place(); if (quotaCard) placeQuotaCard(); }); };
   window.addEventListener('resize', schedule, { passive: true });
   window.addEventListener('scroll', schedule, { passive: true, capture: true });
 
@@ -561,30 +762,35 @@
       }
     }
     if (panel) renderPanel();
-    // 整合额度展示：5h% / 周%（或无 5h 时自适应单显），节省横向空间
+    lastQuotaData = x;
+    if (quotaCard) renderQuotaCard();
+
+    // 整合额度展示：单槽对向双游标（5h ▼天蓝 / 周 ▲翡翠绿）
     const h5Val = typeof x.h5 === 'number' && isFinite(x.h5) ? Math.round(x.h5) : null;
     const wkVal = typeof x.wk === 'number' && isFinite(x.wk) ? Math.round(x.wk) : null;
-    const h5Bad = h5Val !== null && h5Val < 20;
-    const wkBad = wkVal !== null && wkVal < 20;
+    const colH5 = getQuotaColor(h5Val, COLOR_H5_DEF);
+    const colWk = getQuotaColor(wkVal, COLOR_WK_DEF);
 
-    let qHtml = '';
-    if (h5Val !== null && wkVal !== null) {
-      qHtml = `<span style="${h5Bad ? 'color:var(--c-bad)' : ''}">${h5Val}%</span><span class="q-slash">/</span><span style="${wkBad ? 'color:var(--c-bad)' : ''}">${wkVal}%</span>`;
-    } else if (wkVal !== null) {
-      qHtml = `<span style="${wkBad ? 'color:var(--c-bad)' : ''}">${wkVal}%</span>`;
-    } else if (h5Val !== null) {
-      qHtml = `<span style="${h5Bad ? 'color:var(--c-bad)' : ''}">${h5Val}%</span>`;
+    if (h5Val === null && wkVal === null) {
+      cQuota.v.innerHTML = '—';
     } else {
-      qHtml = '—';
-    }
-    cQuota.v.innerHTML = qHtml;
+      const minVal = Math.min(h5Val !== null ? h5Val : 100, wkVal !== null ? wkVal : 100);
+      const h5Left = h5Val !== null ? `calc(${h5Val}% - 3px)` : '0%';
+      const wkLeft = wkVal !== null ? `calc(${wkVal}% - 3px)` : '0%';
+      const h5Display = h5Val !== null ? '' : 'display:none;';
+      const wkDisplay = wkVal !== null ? '' : 'display:none;';
 
-    // 悬停 Tooltip：详尽展示两项倒计时与当前额度池
-    const h5Tip = h5Val !== null ? `5小时额度: ${h5Val}%` + (x.h5Reset ? ` (重置倒计时: ${x.h5Reset})` : '') : '5小时额度: 不限/无';
-    const wkTip = wkVal !== null ? `每周额度: ${wkVal}%` + (x.wkReset ? ` (重置倒计时: ${x.wkReset})` : '') : '每周额度: 不限/无';
-    const poolTip = x.model ? ` | 当前模型: ${x.model}` : '';
-    cQuota.g.title = `${h5Tip}
-${wkTip}${poolTip}`;
+      cQuota.v.innerHTML = `
+        <div class="q-bar-wrap">
+          <div class="q-track">
+            <div class="q-fill" style="width:${minVal}%;"></div>
+          </div>
+          <div class="q-ptr-h5" style="left:${h5Left};border-top-color:${colH5};filter:drop-shadow(0 0 2px ${colH5});${h5Display}"></div>
+          <div class="q-ptr-wk" style="left:${wkLeft};border-bottom-color:${colWk};filter:drop-shadow(0 0 2px ${colWk});${wkDisplay}"></div>
+        </div>
+      `;
+    }
+    cQuota.g.removeAttribute('title');
 
     // 异常主动捕获与轻量报警 Badge
     if (x.errorNotice && x.errorNotice.badge) {
@@ -609,7 +815,7 @@ ${wkTip}${poolTip}`;
     ver: VER, update, mount,
     pendingSwitch: null,     // 页面 → sidecar：切换指令
     pendingCapture: false,   // 页面 → sidecar：抓取当前凭据入库
-    unmount() { try { host.remove(); } catch (_) {} },
+    unmount() { closeQuotaCard(); try { host.remove(); } catch (_) {} },
     /* OAuth 登录确认条：登录完成后显示，点击抓取 token 入库（免 fetch 通道） */
     showLoginConfirm() {
       try {

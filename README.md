@@ -1,7 +1,7 @@
 # Antigravity MiniBar
 **输入框正下方的一行极简实时状态条** —— 在你打字的地方，一眼看全当前会话的健康度。
 English | [简体中文](#功能一览)
-[![CI](https://github.com/dox0633/agy-minibar/actions/workflows/ci.yml/badge.svg)](https://github.com/dox0633/agy-minibar/actions/workflows/ci.yml)`n[![Version](https://img.shields.io/badge/version-1.4.0-blue)](CHANGELOG.md)`n[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![CI](https://github.com/dox0633/agy-minibar/actions/workflows/ci.yml/badge.svg)](https://github.com/dox0633/agy-minibar/actions/workflows/ci.yml)`n[![Version](https://img.shields.io/badge/version-1.5.0-blue)](CHANGELOG.md)`n[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)](#安装)
 [![Antigravity](https://img.shields.io/badge/host-Antigravity%202.0%20Desktop-orange)](#适用对象)
 [![Deps](https://img.shields.io/badge/dependencies-zero-success)](#工作原理)
