@@ -5,7 +5,7 @@
 //  2. 全局只允许一个 #agy-minibar-host；
 //  3. 只改文本与 SVG 属性，不做结构性增删。
 (() => {
-  const VER = 48;
+  const VER = 49;
   const HOST_ID = 'agy-minibar-host';
   if (window.__AGY_MINIBAR && window.__AGY_MINIBAR.ver === VER) return;
 
@@ -15,19 +15,30 @@
       position: fixed;
       display: flex; align-items: center; justify-content: center;
       height: 19px; padding: 0 1px;
-      font-family: "Google Sans Flex", system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+      font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
       font-size: 12.5px; line-height: 1;
       color: var(--c-dim);
-      font-variant-numeric: tabular-nums;
-      letter-spacing: .2px;
       white-space: nowrap; overflow: hidden;
       pointer-events: none;
       z-index: 2147483000;
     }
     .i { display: inline-flex; align-items: center; gap: 4px; padding: 0 9px; flex: 0 0 auto; }
     .i:first-child { padding-left: 0; }
-    .n { color: var(--c-key); font-size: 11.5px; letter-spacing: .2px; }
-    .v { color: var(--c-val); font-weight: 600; }
+    .n {
+      color: var(--c-key);
+      font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+      font-size: 11.5px;
+      font-weight: 550;
+      letter-spacing: 0.5px;
+    }
+    .v {
+      color: var(--c-val);
+      font-family: "JetBrains Mono", "Cascadia Code", Consolas, "Courier New", monospace;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.2px;
+      font-variant-numeric: tabular-nums;
+    }
     .v.ok { color: var(--c-ok); }
     .v.warn { color: var(--c-warn); }
     .v.bad { color: var(--c-bad); }
