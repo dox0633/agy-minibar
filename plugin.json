@@ -1,7 +1,7 @@
 {
   "name": "agy-minibar",
   "displayName": "Antigravity MiniBar",
-  "version": "1.2.7",
+  "version": "1.3.0",
   "description": "输入框正下方的一行极简实时状态条：上下文窗口环形图、会话 Token 合计、轮数、TPS、缓存命中率与 5h/周额度剩余。纯本地读取，零依赖，不改 app.asar。",
   "author": {
     "name": "agy-minibar contributors"

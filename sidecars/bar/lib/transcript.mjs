@@ -266,7 +266,7 @@ export function parseDurationSec(raw) {
   return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
-const MIN_STREAMING_SEC_FOR_TPS = 0.15;
+const MIN_STREAMING_SEC_FOR_TPS = 0.02;
 
 /**
  * Build a Map<stepIndex, speedEntry> from LanguageServerService
@@ -335,6 +335,11 @@ export function enrichSummaryWithSpeed(summary, speedIndex) {
       // 向前回溯最近一个有 speed 数据的主模型调用，避免 TPS/TTFT 误显示为空
       for (let i = summary.series.length - 1; i >= 0 && !sp; i--) {
         sp = speedIndex.get(summary.series[i].stepIndex) || null;
+      }
+      if (!sp && speedIndex.size > 0) {
+        // 全局兜底：取 speedIndex 中步数最大的记录
+        const sorted = [...speedIndex.entries()].sort((a, b) => b[0] - a[0]);
+        if (sorted.length > 0) sp = sorted[0][1];
       }
     }
     latest = sp ? { ...latest, speed: sp } : latest;

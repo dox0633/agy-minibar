@@ -15,6 +15,26 @@
 
 
 
+## [1.3.0] - 2026-11-19
+
+### 新增与优化
+
+- **Language Server 动态 CSRF 探活机制**：解决切号或 LS 重启后生成新 `--csrf_token` 导致 RPC 返回 401 Unauthorized 的问题。现在通过 `wmic` 动态提取活跃 `--csrf_token` 并进行 30s 智能缓存，遇到 401 立即强制重新探测，彻底根除额度和速度僵死。
+- **额度多模型感知与周期性刷新**：
+  - 查询额度增加 `forceRefresh: true` 周期性刷新机制，避免命中死缓存；
+  - 增加模型感知支持：检测当前会话模型，针对 Claude / GPT 等第三方模型自动采用 `3p-*` 额度桶，Gemini 原生模型自动匹配 `gemini-*` 额度桶，解决额度显示不准确或脱节。
+- **TPS 采样精度与重试窗口优化**：
+  - 流式响应时间判定阈值 `MIN_STREAMING_SEC_FOR_TPS` 从 0.15s 降低至 0.02s，避免短吐字或工具调用被丢弃；
+  - `enrichSummaryWithSpeed` 增加全局步数最大记录回溯兜底；
+  - `stats(convId)` 引入最多 6 次连续 tick 重试窗口，避免在生成瞬态永久缓存 null 速度。
+- **单例守卫模式防风暴重构**：获取单例锁失败时不再直接 `process.exit(0)`（避免与 sidecar 的 `restart_policy: always` 冲突造成高频拉起风暴），改为休眠轮询待命，主进程退出后平滑晋升。
+- **进程与管道异常守卫**：增加 `process.stdout`/`stderr` 的 `EPIPE` 异常监听，避免宿主关闭管道时抛错崩溃。
+- **CDP 与 DevTools 端口多路径兼容**：`devPort()` 扩充探测 `antigravity`、`Antigravity`、`Antigravity IDE` 及 `LOCALAPPDATA`，适配新版客户端覆盖升级后的各类路径形态。
+- **前端注入增强 (inject.js)**：
+  - 版本升级至 `VER = 28`；
+  - Token 数值支持 k/M 小数自适应展示（<0.01M 显示为 k，>=10M 显示 1 位小数，其余 2 位小数）；
+  - 为 TPS、5小时额度、周额度补充悬停 Tooltip 详细说明。
+
 ## [1.2.7] - 2026-11-15
 
 ### 修复
@@ -30,6 +50,7 @@
 - 修复后：latest 无速度时向前回溯最近的主模型调用速度（TTFT/TPS 均适用），
   静止会话仍显示 `—`（诚实原则不变）。
 
+[1.3.0]: https://github.com/dox0633/agy-minibar/compare/v1.2.7...v1.3.0
 [1.2.7]: https://github.com/dox0633/agy-minibar/compare/v1.2.6...v1.2.7
 
 ## [1.2.6] - 2026-11-15

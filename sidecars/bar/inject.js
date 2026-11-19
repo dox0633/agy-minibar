@@ -5,7 +5,7 @@
 //  2. 全局只允许一个 #agy-minibar-host；
 //  3. 只改文本与 SVG 属性，不做结构性增删。
 (() => {
-  const VER = 27;
+  const VER = 28;
   const HOST_ID = 'agy-minibar-host';
   if (window.__AGY_MINIBAR && window.__AGY_MINIBAR.ver === VER) return;
 
@@ -452,10 +452,12 @@
     cCache.v.textContent = pct(x.cachePct);
     // Token 合计：本会话累计 (input + cache_read + output)，M 单位
     cTok.v.textContent = typeof x.tokensM === 'number' && isFinite(x.tokensM) && x.tokensM > 0
-      ? (x.tokensM >= 10 ? x.tokensM.toFixed(1) : x.tokensM.toFixed(2)) + 'M'
+      ? (x.tokensM >= 10 ? x.tokensM.toFixed(1) + 'M' : (x.tokensM < 0.01 ? (x.tokensM * 1000).toFixed(0) + 'k' : x.tokensM.toFixed(2) + 'M'))
       : '—';
     // TPS = 纯解码速度（output_tokens / streaming_seconds），与 DSH 下方 tok/s 同口径
     cTps.v.textContent = typeof x.tps === 'number' && isFinite(x.tps) && x.tps > 0 ? x.tps.toFixed(0) : '—';
+    if (x.ttft) cTps.g.title = '纯生成速度 ' + (x.tps > 0 ? x.tps.toFixed(1) : '—') + ' tok/s | 首字响应 ' + x.ttft.toFixed(2) + 's' + (x.model ? ' (' + x.model + ')' : '');
+    else if (x.model) cTps.g.title = '模型: ' + x.model;
     cTurns.v.textContent = typeof x.turns === 'number' && isFinite(x.turns) && x.turns > 0 ? String(Math.round(x.turns)) : '—';
     // 账号项：显示 payload 下行的账号与账号列表快照
     ensureAccountCell();
@@ -487,7 +489,9 @@
     if (panel) renderPanel();
     cH5.v.textContent = pct(x.h5);
     tone(cH5.v, typeof x.h5 === 'number' && x.h5 < 20 ? 'bad' : '');
+    cH5.g.title = '5小时额度剩余' + (x.h5 != null ? ' ' + Math.round(x.h5) + '%' : '');
     cWk.v.textContent = pct(x.wk);
+    cWk.g.title = '周额度剩余' + (x.wk != null ? ' ' + Math.round(x.wk) + '%' : '');
 
     // 上行：pending 指令回传给 sidecar（含消费标记，避免 sidecar 重复执行）
     return {

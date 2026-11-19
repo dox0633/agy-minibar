@@ -4,7 +4,7 @@
  * 不修改 app.asar，不写宿主任何配置。
  */
 
-import { exec, spawn } from 'node:child_process';
+import { exec, execSync, spawn } from 'node:child_process';
 import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
@@ -31,8 +31,16 @@ function log(...a) {
     appendFileSync(LOGFILE, `[${new Date().toISOString()}] ` + a.map(v => typeof v === 'string' ? v : JSON.stringify(v)).join(' ') + '\n');
   } catch {}
 }
-process.on('uncaughtException', e => log('UNCAUGHT', (e && e.stack) || String(e)));
-process.on('unhandledRejection', e => log('UNHANDLED', (e && e.stack) || String(e)));
+process.on('uncaughtException', e => {
+  if (e && e.code === 'EPIPE') return;
+  log('UNCAUGHT', (e && e.stack) || String(e));
+});
+process.on('unhandledRejection', e => {
+  if (e && e.code === 'EPIPE') return;
+  log('UNHANDLED', (e && e.stack) || String(e));
+});
+process.stdout?.on('error', err => { if (err.code !== 'EPIPE') throw err; });
+process.stderr?.on('error', err => { if (err.code !== 'EPIPE') throw err; });
 
 /** 切换用的临时目录（与 token 库同级，便于收紧权限） */
 function LIB_DIR_TEMP() {
@@ -63,7 +71,7 @@ function acquireSingletonLock() {
           try { unlinkSync(LOCK_FILE); } catch {}
           continue;
         }
-        return false; // 活着的同伴持有，自己退出
+        return false; // 活着的同伴持有，自己进入待命
       } catch {
         try { unlinkSync(LOCK_FILE); } catch {} // 锁文件损坏，重试
       }
@@ -72,11 +80,16 @@ function acquireSingletonLock() {
   return false;
 }
 
+// 待命模式：若同伴持有锁，绝不直接 process.exit(0)（否则 restart_policy: always 会导致死循环狂刷拉起）
 if (!acquireSingletonLock()) {
-  log('SINGLETON_YIELD', `pid=${process.pid} -> another instance holds the lock`);
-  process.exit(0);
+  log('SINGLETON_STANDBY', `pid=${process.pid} -> standby waiting for lock`);
+  while (!acquireSingletonLock()) {
+    await new Promise(r => setTimeout(r, 5000));
+  }
+  log('SINGLETON_PROMOTED', `pid=${process.pid} -> promoted to active`);
+} else {
+  log('SINGLETON_ACQUIRE', `pid=${process.pid}`);
 }
-log('SINGLETON_ACQUIRE', `pid=${process.pid}`);
 setInterval(() => {
   try { writeFileSync(LOCK_FILE, JSON.stringify({ pid: process.pid, at: Date.now() })); } catch {}
 }, 10_000);
@@ -147,60 +160,126 @@ function scanIncrement(file) {
   } catch { return null; }
 }
 
-/* ---------------- Language Server RPC ---------------- */
+/* ---------------- Language Server RPC & 动态发现 ---------------- */
 
-function bases() {
-  const raw = String(process.env.ANTIGRAVITY_LS_ADDRESS || '').trim().replace(/\/$/, '');
-  const out = [];
-  if (raw) {
-    if (/^https?:\/\//i.test(raw)) out.push(raw);
-    else {
-      out.push(`https://${raw}`, `http://${raw}`);
-      const port = raw.includes(':') ? raw.split(':').pop() : '';
-      if (/^\d+$/.test(port)) out.push(`https://127.0.0.1:${port}`, `http://127.0.0.1:${port}`);
+let lsConn = { at: 0, base: '', csrf: '', pid: 0 };
+
+async function discoverLsConnection(force = false) {
+  const now = Date.now();
+  if (!force && lsConn.base && (now - lsConn.at < 30_000)) {
+    return lsConn;
+  }
+
+  let pid = null;
+  let csrf = null;
+  // 1) 通过 wmic 获取 language_server.exe 的命令行（提取当前活跃的 --csrf_token）
+  try {
+    const csv = execSync('wmic process where "name=\'language_server.exe\'" get ProcessId,CommandLine /format:csv', {
+      encoding: 'utf8', windowsHide: true, timeout: 5000,
+    });
+    for (const line of csv.split(/\r?\n/)) {
+      if (!line.includes('language_server.exe')) continue;
+      const parts = line.split(',');
+      const cmd = parts[1] || '';
+      const p = parts[2] || '';
+      const m = cmd.match(/--csrf_token\s+([0-9a-f-]+)/i);
+      if (m) {
+        csrf = m[1];
+        pid = Number(p.trim());
+        break;
+      }
+    }
+  } catch (e) {
+    log('WMIC_ERR', e.message);
+  }
+
+  if (!csrf) csrf = String(process.env.ANTIGRAVITY_CSRF_TOKEN || '');
+
+  // 2) 通过 netstat 快速提取监听端口（耗时约 50ms）
+  const ports = [];
+  try {
+    const netstat = execSync('netstat -ano -p tcp', { encoding: 'utf8', windowsHide: true, timeout: 5000 });
+    for (const line of netstat.split(/\r?\n/)) {
+      if (!line.includes('LISTENING')) continue;
+      const parts = line.trim().split(/\s+/);
+      if (parts.length >= 5) {
+        const linePid = Number(parts[4]);
+        if (!pid || linePid === pid) {
+          const port = Number(parts[1].split(':').pop());
+          if (port > 0 && port < 65536 && !ports.includes(port)) ports.push(port);
+        }
+      }
+    }
+  } catch (e) {
+    log('NETSTAT_ERR', e.message);
+  }
+
+  // 环境变量中预设端口作为补充候选项
+  const envAddr = String(process.env.ANTIGRAVITY_LS_ADDRESS || '');
+  const envPort = Number(envAddr.split(':').pop());
+  if (envPort > 0 && !ports.includes(envPort)) ports.unshift(envPort);
+
+  // 3) 探测每个端口，寻找返回 200 的活跃端口
+  for (const port of ports) {
+    for (const host of ['127.0.0.1', 'localhost']) {
+      const base = `http://${host}:${port}`;
+      const testRes = await postHttp(base, 'RetrieveUserQuotaSummary', { forceRefresh: false }, csrf, 1500);
+      if (testRes.ok) {
+        lsConn = { at: Date.now(), base, csrf, pid };
+        log('LS_DISCOVERED', `base=${base} pid=${pid} csrf=...${csrf.slice(-6)}`);
+        return lsConn;
+      }
     }
   }
-  // 动态发现（LS 重启后端口变化时 env 已陈旧）
-  for (const b of discoverLsBases()) if (!out.includes(b)) out.push(b);
-  return out;
+
+  return lsConn.base ? lsConn : null;
 }
 
-function post(base, method, body, timeout) {
-  const csrf = String(process.env.ANTIGRAVITY_CSRF_TOKEN || '');
-  const mod = base.startsWith('https://') ? https : http;
+function postHttp(base, method, body, csrf, timeout = 4000) {
   let payload;
-  try { payload = JSON.stringify(body || {}); } catch { return Promise.resolve(null); }
+  try { payload = JSON.stringify(body || {}); } catch { return Promise.resolve({ ok: false }); }
   return new Promise(resolve => {
     let done = false;
     const fin = v => { if (!done) { done = true; resolve(v); } };
+    const mod = base.startsWith('https://') ? https : http;
     const req = mod.request(`${base}/exa.language_server_pb.LanguageServerService/${method}`, {
       method: 'POST',
       rejectUnauthorized: false,
       headers: {
         'Content-Type': 'application/json',
         'Connect-Protocol-Version': '1',
-        'x-codeium-csrf-token': csrf,
+        'x-codeium-csrf-token': csrf || '',
         'Content-Length': Buffer.byteLength(payload),
       },
+      timeout,
     }, res => {
       let text = '';
       let n = 0;
-      res.on('data', c => { n += c.length; if (n > 8e6) { req.destroy(); return fin(null); } text += c; });
+      res.on('data', c => { n += c.length; if (n > 8e6) { req.destroy(); return fin({ ok: false, status: res.statusCode }); } text += c; });
       res.on('end', () => {
-        if (res.statusCode !== 200) return fin(null);
-        try { fin(JSON.parse(text)); } catch { fin(null); }
+        if (res.statusCode !== 200) return fin({ ok: false, status: res.statusCode });
+        try { fin({ ok: true, data: JSON.parse(text) }); } catch { fin({ ok: false, status: 200, parseErr: true }); }
       });
     });
-    req.setTimeout(timeout, () => { req.destroy(); fin(null); });
-    req.on('error', () => fin(null));
+    req.setTimeout(timeout, () => { req.destroy(); fin({ ok: false, timeout: true }); });
+    req.on('error', (e) => fin({ ok: false, err: e.message }));
     req.end(payload);
   });
 }
 
 async function rpc(method, body, timeout = 4000) {
-  for (const b of bases()) {
-    const r = await post(b, method, body, timeout);
-    if (r) return r;
+  let conn = await discoverLsConnection();
+  if (conn && conn.base) {
+    const res = await postHttp(conn.base, method, body, conn.csrf, timeout);
+    if (res.ok) return res.data;
+    if (res.status === 401 || res.err || res.timeout) {
+      // 鉴权失败或连接断开（例如切号后 LS 重启），强制重新探测
+      conn = await discoverLsConnection(true);
+      if (conn && conn.base) {
+        const retryRes = await postHttp(conn.base, method, body, conn.csrf, timeout);
+        if (retryRes.ok) return retryRes.data;
+      }
+    }
   }
   return null;
 }
@@ -224,26 +303,43 @@ function winOf(b) {
   return '';
 }
 
-async function quota() {
+async function quota(model = '') {
   const now = Date.now();
-  if (S.q.d && now - S.q.at < 15000) return S.q.d;
-  const r = await rpc('RetrieveUserQuotaSummary', { forceRefresh: false }, 5000);
+  // 缓存 15 秒（模型改变时立即刷新）
+  if (S.q.d && now - S.q.at < 15000 && S.q.model === model) return S.q.d;
+
+  // 定期带 forceRefresh: true 向上游 Google 查询最新配额，避免 LS 返回内部陈旧快照
+  const shouldForce = !S.q.at || (now - S.q.at > 30000);
+  const r = await rpc('RetrieveUserQuotaSummary', { forceRefresh: shouldForce }, 5000);
   const p = r && r.response !== undefined ? r.response : r;
   if (!p || typeof p !== 'object') return S.q.d || { h5: null, wk: null };
 
   const groups = Array.isArray(p.groups) ? p.groups : [];
   let buckets = [];
-  for (const g of groups) for (const b of (Array.isArray(g && g.buckets) ? g.buckets : [])) buckets.push({ ...b, _g: String(g && g.displayName || '') });
+  for (const g of groups) {
+    for (const b of (Array.isArray(g && g.buckets) ? g.buckets : [])) {
+      buckets.push({ ...b, _g: String(g && g.displayName || '') });
+    }
+  }
   if (!buckets.length && Array.isArray(p.buckets)) buckets = p.buckets;
 
-  const gem = buckets.filter(b => /gemini/i.test(b._g));
-  const pool = gem.length ? gem : buckets;
+  // 根据当前会话实际使用的模型动态匹配额度池：
+  // 若使用 Claude 或 GPT 系列，匹配 3p 组；否则默认匹配 Gemini 组
+  const is3p = /claude|gpt|oss/i.test(model);
+  let pool = [];
+  if (is3p) {
+    pool = buckets.filter(b => /claude|gpt/i.test(b._g));
+  } else {
+    pool = buckets.filter(b => /gemini/i.test(b._g));
+  }
+  if (!pool.length) pool = buckets;
+
   const pick = w => {
     const hit = pool.find(b => winOf(b) === w);
     return hit ? frac(hit) : null;
   };
   const d = { h5: pick('5h'), wk: pick('weekly') };
-  S.q = { d, at: now };
+  S.q = { d, at: now, model };
   return d;
 }
 
@@ -267,7 +363,8 @@ async function stats(convId) {
   if (!st) return o;
 
   let c = S.ts.get(loc.path);
-  if (!c || c.mtime !== st.mtimeMs || c.size !== st.size) {
+  const needsSpeedRetry = c && (!c.sum?.latest?.speed) && (c.speedRetries || 0) < 6;
+  if (!c || c.mtime !== st.mtimeMs || c.size !== st.size || needsSpeedRetry) {
     // 统一走全量解析：尾部快读在不同时刻会解析出不同的最新步骤，
     // 是状态条数值在「有/无 TPS」之间反复横跳的直接原因。
     // 全量解析一次成型后缓存，直到文件变化前输出完全稳定。
@@ -279,7 +376,8 @@ async function stats(convId) {
     if (gm && Array.isArray(gm.generatorMetadata)) {
       try { sum = enrichSummaryWithSpeed(sum, buildSpeedIndex(gm.generatorMetadata)); } catch {}
     }
-    c = { mtime: st.mtimeMs, size: st.size, sum };
+    const speedRetries = (c && c.mtime === st.mtimeMs && c.size === st.size) ? ((c.speedRetries || 0) + 1) : 0;
+    c = { mtime: st.mtimeMs, size: st.size, sum, speedRetries };
     if (S.ts.size > 64) S.ts.clear();
     S.ts.set(loc.path, c);
   }
@@ -310,10 +408,14 @@ async function stats(convId) {
 /* ---------------- CDP ---------------- */
 
 function devPort() {
-  const cands = [
-    process.env.APPDATA ? join(process.env.APPDATA, 'Antigravity', 'DevToolsActivePort') : '',
-    process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, 'Antigravity', 'DevToolsActivePort') : '',
-  ].filter(Boolean);
+  const dirs = ['antigravity', 'Antigravity', 'Antigravity IDE'];
+  const bases = [process.env.APPDATA, process.env.LOCALAPPDATA].filter(Boolean);
+  const cands = [];
+  for (const b of bases) {
+    for (const d of dirs) {
+      cands.push(join(b, d, 'DevToolsActivePort'));
+    }
+  }
   for (const f of cands) {
     try {
       const t = readFileSync(f, 'utf-8').split(/\r?\n/)[0].trim();
@@ -330,6 +432,7 @@ async function findPage(port) {
     if (!Array.isArray(l)) return null;
     return l.find(t => t.type === 'page' && /^https:\/\/127\.0\.0\.1:\d+\/c\//.test(String(t.url || '')))
         || l.find(t => t.type === 'page' && /^https:\/\/127\.0\.0\.1/.test(String(t.url || '')))
+        || l.find(t => t.type === 'page' && !t.url.startsWith('chrome-extension://'))
         || null;
   } catch { return null; }
 }
@@ -402,45 +505,6 @@ function liveQuotaRecord(email) {
   } catch { return null; }
 }
 
-/* ---------------- LS 端口动态发现 ----------------
- * 应用重启后 LS 端口会变，而 sidecar 的环境变量是启动时注入的（可能陈旧）。
- * 通过枚举 language_server.exe 的监听端口 + 探测 GetUserStatus 的 401 特征
- * 来发现当前活跃的 LS 地址（每轮 tick 都可执行，结果缓存 60 秒）。
- */
-import { execSync } from 'node:child_process';
-let lsDiscoveryCache = { at: 0, bases: [] };
-
-function discoverLsBases() {
-  const now = Date.now();
-  if (now - lsDiscoveryCache.at < 60_000 && lsDiscoveryCache.bases.length) return lsDiscoveryCache.bases;
-  try {
-    const out = execSync('tasklist /FI "IMAGENAME eq language_server.exe" /FO CSV /NH',
-      { encoding: 'utf8', timeout: 6000, windowsHide: true });
-    const pids = [];
-    for (const line of out.split(/\r?\n/)) {
-      const m = line.match(/"language_server\.exe","(\d+)"/);
-      if (m) pids.push(Number(m[1]));
-    }
-    const ports = new Set();
-    for (const pid of pids) {
-      try {
-        const conns = execSync(
-          `powershell -NoProfile -Command "Get-NetTCPConnection -State Listen -OwningProcess ${pid} | Select-Object -ExpandProperty LocalPort"`,
-          { encoding: 'utf8', timeout: 10000, windowsHide: true });
-        for (const p of conns.split(/\r?\n/)) {
-          const port = Number(p.trim());
-          if (port > 0 && port < 65536) ports.add(port);
-        }
-      } catch { /* 单个进程失败继续 */ }
-    }
-    const bases = [];
-    for (const port of ports) {
-      bases.push(`https://localhost:${port}`, `https://127.0.0.1:${port}`, `http://127.0.0.1:${port}`);
-    }
-    if (bases.length) lsDiscoveryCache = { at: now, bases };
-    return bases;
-  } catch { return lsDiscoveryCache.bases || []; }
-}
 
 let cdp = null;
 
@@ -527,10 +591,11 @@ async function tick() {
 
     const st = await stats(S.convId);
     let q = { h5: null, wk: null };
-    try { q = (await quota()) || q; } catch {}
+    try { q = (await quota(st.model)) || q; } catch {}
 
     const payload = {
       convId: S.convId,
+      model: st.model || '',
       ctxPct: st.ctxPct,
       compactPct: st.compactPct,
       cachePct: st.cachePct,
@@ -754,6 +819,9 @@ async function switchToAccount(email) {
           log('CRED_RE_ASSERT', target);
         }
       } catch (e) { log('CRED_RE_ASSERT_FAIL', e.message); }
+      // 切号后 LS 被杀，宿主拉起新实例：清空旧额度缓存并触发动态发现
+      S.q = { d: null, at: 0, model: '' };
+      setTimeout(() => { discoverLsConnection(true).catch(() => {}); }, 2500);
     } catch (e) { log('LS_RESTART_FAIL', e.message); }
 
     SW.activeEmail = target;
