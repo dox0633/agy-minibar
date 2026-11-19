@@ -5,7 +5,7 @@
 //  2. 全局只允许一个 #agy-minibar-host；
 //  3. 只改文本与 SVG 属性，不做结构性增删。
 (() => {
-  const VER = 49;
+  const VER = 50;
   const HOST_ID = 'agy-minibar-host';
   if (window.__AGY_MINIBAR && window.__AGY_MINIBAR.ver === VER) return;
 
@@ -459,7 +459,7 @@
     return { g, v, ic };
   }
 
-  sep(); const cTok = cell('Token', I_TOKEN, '');
+  sep(); const cTok = cell('TOK', I_TOKEN, '');
   cTok.g.classList.add('token-cell');
   cTok.g.addEventListener('mouseenter', showTokenCard);
   cTok.g.addEventListener('mouseleave', scheduleCloseTokenCard);
