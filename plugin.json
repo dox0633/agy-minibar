@@ -1,8 +1,8 @@
 {
   "name": "agy-minibar",
   "displayName": "Antigravity MiniBar",
-  "version": "1.7.0",
-  "description": "输入框正下方的一行极简实时状态条：全系统一翡翠绿加粗微环（上下文与 5h/周额度双环）、Token 统计悬浮卡片（日月周三维用量与多刷新周期）、零跳动平滑账号热切换、TPS 呼吸点、缓存命中率及高保真配额浮层卡片。纯本地读取，零依赖，不改 app.asar。",
+  "version": "1.8.0",
+  "description": "输入框正下方的一行极简实时状态条：全系规范化「图标+英文简写+数值」（Token、TPS 呼吸闪电、CTX 上下文、HIT 缓存命中、ACC 账号、5H/WK 双环额度）、Token 悬浮卡片（日月周三维统计）、零跳动平滑账号热切换及高保真配额浮层卡片。纯本地读取，零依赖，不改 app.asar。",
   "author": {
     "name": "agy-minibar contributors"
   },

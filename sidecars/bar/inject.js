@@ -5,7 +5,7 @@
 //  2. 全局只允许一个 #agy-minibar-host；
 //  3. 只改文本与 SVG 属性，不做结构性增删。
 (() => {
-  const VER = 41;
+  const VER = 48;
   const HOST_ID = 'agy-minibar-host';
   if (window.__AGY_MINIBAR && window.__AGY_MINIBAR.ver === VER) return;
 
@@ -178,21 +178,31 @@
     .tc-val { font-family: monospace; font-weight: bold; color: var(--c-ok); }
     .tc-time { font-size: 9.5px; color: var(--c-dim); }
     .tc-foot { border-top: 1px solid var(--c-sep); margin-top: 8px; padding-top: 6px; display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: var(--c-dim); }
-    .pulse-dot {
-      display: inline-block;
-      width: 5px; height: 5px;
-      border-radius: 50%;
-      margin-right: 4px;
-      background: var(--c-sep);
-      vertical-align: middle;
-      transition: all .2s;
+    .ic-bolt {
+      color: var(--c-ok);
+      transform-origin: center;
+      transition: all .25s ease;
     }
-    .pulse-dot.generating {
-      animation: agy-pulse 1.2s infinite ease-in-out;
+    .ic-bolt.generating {
+      animation: agy-bolt-pulse 1.3s infinite ease-in-out;
     }
-    .pulse-dot.fast { color: #34a853; background: #34a853; }
-    .pulse-dot.medium { color: #fbbc04; background: #fbbc04; }
-    .pulse-dot.slow { color: #ea4335; background: #ea4335; }
+    .ic-bolt.fast {
+      color: #34a853;
+      filter: drop-shadow(0 0 3px rgba(52, 168, 83, 0.6));
+    }
+    .ic-bolt.medium {
+      color: #fbbc04;
+      filter: drop-shadow(0 0 3px rgba(251, 188, 4, 0.6));
+    }
+    .ic-bolt.slow {
+      color: #ea4335;
+      filter: drop-shadow(0 0 3px rgba(234, 67, 53, 0.6));
+    }
+    @keyframes agy-bolt-pulse {
+      0% { transform: scale(0.92); opacity: 0.65; filter: drop-shadow(0 0 1px currentColor); }
+      50% { transform: scale(1.22); opacity: 1; filter: drop-shadow(0 0 5px currentColor); }
+      100% { transform: scale(0.92); opacity: 0.65; filter: drop-shadow(0 0 1px currentColor); }
+    }
     .err-badge {
       display: none; align-items: center; gap: 4px;
       font-size: 10px; padding: 1px 6px; border-radius: 4px;
@@ -345,6 +355,9 @@
     s.appendChild(pth('M5 8.5v7c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5v-7'));
     s.appendChild(pth('M5 12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5'));
   });
+  const I_LAYERS = () => icon(s => {
+    s.appendChild(pth('M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5'));
+  });
 
   function themeOf(el) {
     try {
@@ -422,42 +435,36 @@
     flNode.setAttribute('stroke', t === 'bad' ? 'var(--c-bad)' : t === 'warn' ? 'var(--c-warn)' : 'var(--c-ok)');
   }
 
-  /* ---- 上下文圆环 ---- */
-  const ringCtx = makeRing();
-  const gCtx = el('div', 'i');
-  gCtx.appendChild(ringCtx.ring);
-  gCtx.appendChild(el('span', 'n', '上下文'));
-  const vCtx = el('span', 'v', '—');
-  gCtx.appendChild(vCtx);
-
   function sep() { const s = el('i', 'sep'); bar.appendChild(s); return s; }
 
   function cell(name, iconFn, cls) {
     const g = el('div', 'i');
-    g.appendChild(iconFn());
+    const ic = iconFn();
+    g.appendChild(ic);
     g.appendChild(el('span', 'n', name));
     const v = el('span', 'v' + (cls ? ' ' + cls : ''), '—');
     g.appendChild(v);
     bar.appendChild(g);
-    return { g, v };
+    return { g, v, ic };
   }
 
   sep(); const cTok = cell('Token', I_TOKEN, '');
   cTok.g.classList.add('token-cell');
   cTok.g.addEventListener('mouseenter', showTokenCard);
   cTok.g.addEventListener('mouseleave', scheduleCloseTokenCard);
+
   sep(); const cTps = cell('TPS', I_BOLT, '');
-  const cTpsDot = el('span', 'pulse-dot');
-  cTps.g.insertBefore(cTpsDot, cTps.v);
-  // Token → TPS 之后插入上下文圆环，再接缓存
-  sep(); bar.appendChild(gCtx);
-  sep(); const cCache = cell('缓存命中', I_CACHE, 'ok');
+  cTps.ic.classList.add('ic-bolt');
+
+  sep(); const cCtx = cell('CTX', I_LAYERS, '');
+
+  sep(); const cCache = cell('HIT', I_CACHE, 'ok');
 
   /* ---- 账号切换项 (放置在 5小时额度左侧) ---- */
   sep();
   const gAcc = el('div', 'i acc');
   gAcc.appendChild(I_USER());
-  gAcc.appendChild(el('span', 'n', '账号'));
+  gAcc.appendChild(el('span', 'n', 'ACC'));
   const vAcc = el('span', 'v', '—');
   gAcc.appendChild(vAcc);
   gAcc.addEventListener('click', (ev) => {
@@ -466,19 +473,19 @@
   });
   bar.appendChild(gAcc);
 
-  /* ---- 额度单元格 (Scheme B: 5h+环+数值 · 周+环+数值，统一规格与颜色) ---- */
+  /* ---- 额度单元格 (Scheme B: 5H+环+数值 · WK+环+数值，统一规格与颜色) ---- */
   sep();
   const cQuota = el('div', 'i quota-cell');
   cQuota.addEventListener('mouseenter', showQuotaCard);
   cQuota.addEventListener('mouseleave', scheduleCloseQuotaCard);
 
-  const lblH5 = el('span', 'n', '5h');
+  const lblH5 = el('span', 'n', '5H');
   const ringH5 = makeRing();
   const vH5 = el('span', 'v', '—');
 
   const qSep = el('span', 'q-dot', '·');
 
-  const lblWk = el('span', 'n', '周');
+  const lblWk = el('span', 'n', 'WK');
   const ringWk = makeRing();
   const vWk = el('span', 'v', '—');
 
@@ -941,9 +948,7 @@
   }
   const pct = n => (typeof n === 'number' && isFinite(n) ? Math.round(n) + '%' : '—');
 
-  function setRing(v, t) {
-    setRingProgress(ringCtx.fl, v, t);
-  }
+  function setRing() {}
 
   let themed = null;
   function anchor() {
@@ -1006,19 +1011,16 @@
       if (x.ttft) lastValidTtft = x.ttft;
     }
 
-    const phys = typeof x.ctxPct === 'number' && isFinite(x.ctxPct) ? x.ctxPct : null;
+    // 上下文展示（[图层图标] + "上下文" + 百分比数值，按 256k 压缩线分级预警变色）
     const comp = typeof x.compactPct === 'number' && isFinite(x.compactPct) ? x.compactPct : null;
     const t = comp === null ? '' : comp >= 92 ? 'bad' : comp >= 80 ? 'warn' : '';
-    setRing(phys, t);
-    vCtx.textContent = pct(phys);
-    tone(vCtx, t);
-
-    // 上下文悬浮详细说明
     const usedTok = x.contextUsed || 0;
     const limitTok = x.modelLimit || 1048576;
-    const usedStr = (usedTok >= 1e6 ? (usedTok / 1e6).toFixed(2) + 'M' : (usedTok / 1000).toFixed(1) + 'k');
+    const usedStr = (usedTok >= 1e6 ? (usedTok / 1e6).toFixed(2) + 'M' : (usedTok >= 1000 ? (usedTok / 1000).toFixed(0) + 'k' : (usedTok > 0 ? String(usedTok) : '—')));
+    cCtx.v.textContent = pct(x.ctxPct);
+    tone(cCtx.v, t);
     const limitStr = (limitTok >= 1e6 ? (limitTok / 1e6).toFixed(1) + 'M' : (limitTok / 1000).toFixed(0) + 'k');
-    gCtx.title = `上下文窗口: ${usedStr} / ${limitStr} (${pct(x.ctxPct)}) | 自动压缩线: 256k (${pct(x.compactPct)})`;
+    cCtx.g.title = `上下文窗口: ${usedStr} / ${limitStr} (${pct(x.ctxPct)}) | 自动压缩线: 256k (${pct(x.compactPct)})`;
 
     // 缓存时效颜色预警（距上一轮对话时长）
     cCache.v.textContent = pct(x.cachePct);
@@ -1040,7 +1042,7 @@
     lastTokenData = x;
     if (tokenCard && tokenCard.isConnected) renderTokenCard();
 
-    // TPS 呼吸点动效与状态
+    // TPS 呼吸图标动效与状态（闪电图标直接呼吸，去除中间冗余圆点）
     const isGen = Boolean(x.isGenerating);
     let tpsVal = typeof x.tps === 'number' && isFinite(x.tps) ? x.tps : 0;
     const isSwitching = switchState === 'pending' || Boolean(switchingTarget);
@@ -1054,11 +1056,11 @@
     else if (tpsVal >= 12 && tpsVal < 30) speedTier = 'medium';
 
     if (isGen) {
-      cTpsDot.className = `pulse-dot generating ${speedTier}`;
+      cTps.ic.setAttribute('class', `ic ic-bolt generating ${speedTier}`);
     } else if (tpsVal > 0) {
-      cTpsDot.className = `pulse-dot ${speedTier}`;
+      cTps.ic.setAttribute('class', `ic ic-bolt ${speedTier}`);
     } else {
-      cTpsDot.className = 'pulse-dot';
+      cTps.ic.setAttribute('class', 'ic ic-bolt');
     }
 
     // TPS = 纯解码速度（output_tokens / streaming_seconds），与 DSH 下方 tok/s 同口径
