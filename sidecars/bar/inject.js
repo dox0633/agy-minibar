@@ -5,7 +5,7 @@
 //  2. 全局只允许一个 #agy-minibar-host；
 //  3. 只改文本与 SVG 属性，不做结构性增删。
 (() => {
-  const VER = 38;
+  const VER = 39;
   const HOST_ID = 'agy-minibar-host';
   if (window.__AGY_MINIBAR && window.__AGY_MINIBAR.ver === VER) return;
 
@@ -419,11 +419,25 @@
   sep(); const cTps = cell('TPS', I_BOLT, '');
   const cTpsDot = el('span', 'pulse-dot');
   cTps.g.insertBefore(cTpsDot, cTps.v);
-  // Token → TPS 之后插入上下文圆环，再接缓存与额度
+  // Token → TPS 之后插入上下文圆环，再接缓存
   sep(); bar.appendChild(gCtx);
   sep(); const cCache = cell('缓存命中', I_CACHE, 'ok');
 
+  /* ---- 账号切换项 (放置在 5小时额度左侧) ---- */
+  sep();
+  const gAcc = el('div', 'i acc');
+  gAcc.appendChild(I_USER());
+  gAcc.appendChild(el('span', 'n', '账号'));
+  const vAcc = el('span', 'v', '—');
+  gAcc.appendChild(vAcc);
+  gAcc.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    togglePanel();
+  });
+  bar.appendChild(gAcc);
+
   /* ---- 额度单元格 (Scheme B: 5h+环+数值 · 周+环+数值，统一规格与颜色) ---- */
+  sep();
   const cQuota = el('div', 'i quota-cell');
   cQuota.addEventListener('mouseenter', showQuotaCard);
   cQuota.addEventListener('mouseleave', scheduleCloseQuotaCard);
@@ -445,7 +459,7 @@
   cQuota.appendChild(lblWk);
   cQuota.appendChild(ringWk.ring);
   cQuota.appendChild(vWk);
-  sep(); bar.appendChild(cQuota);
+  bar.appendChild(cQuota);
 
   const cErr = el('span', 'err-badge');
   bar.appendChild(cErr);
@@ -652,27 +666,9 @@
    * 免 fetch 通道：accounts 数据由 sidecar 在 payload 下行；点击把
    * pendingSwitch 写到 window.__AGY_MINIBAR.pendingSwitch，由 sidecar 下一轮读走执行。
    */
-  let gAcc = null;
-  let vAcc = null;
   let accData = null;   // payload.accounts 快照
   let switchState = ''; // '' | 'pending' | 'ok' | 'fail:msg'
-
-  function ensureAccountCell() {
-    if (gAcc) return;
-    const accBtn = el('div', 'i acc');
-    accBtn.appendChild(I_USER());
-    accBtn.appendChild(el('span', 'n', '账号'));
-    vAcc = el('span', 'v', '—');
-    accBtn.appendChild(vAcc);
-    const target = cQuota.g;
-    if (target && target.parentNode) target.parentNode.insertBefore(accBtn, target);
-    else bar.appendChild(accBtn);
-    gAcc = accBtn;
-    accBtn.addEventListener('click', (ev) => {
-      ev.stopPropagation();
-      togglePanel();
-    });
-  }
+  function ensureAccountCell() {} // 账号项已在主布局中于 5h 额度左侧静态就位
 
   /* ---- 账号弹出面板 ---- */
   let panel = null;
