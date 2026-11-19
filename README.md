@@ -7,7 +7,7 @@ English | [简体中文](#功能一览)
 [![Deps](https://img.shields.io/badge/dependencies-zero-success)](#工作原理)
 ![MiniBar 效果图](docs/minibar.png)
 ```
-⬓ Token 2.70M  ⚡ TPS 68  ◯ 上下文 12%  🗄 缓存命中 95%  👤 account  📏 额度 [▼/▲]
+⬓ Token 2.70M  ⚡ TPS 68  ◯ 上下文 12%  🗄 缓存命中 95%  ◯ 5h 53% · ◯ 周 87%  👤 account
 ```
 ---
 ## 这是什么
@@ -19,15 +19,15 @@ Google **Antigravity 2.0 桌面版**原生不显示任何会话状态——上�
 - **纯本地**：只读取本机 transcript 日志和本地 Language Server RPC，不向任何外部服务发送数据
 - **不改 asar**：通过官方 sidecar 插件机制 + CDP 注入，Antigravity 升级后无需重新适配
 ## 功能一览
-显示顺序：**Token → TPS (呼吸点) → 上下文 → 缓存命中 → 账号 → 额度 (对向标尺 + 悬停卡片)**
+显示顺序：**Token → TPS (呼吸点) → 上下文 (加粗微环) → 缓存命中 → 额度 (5h加粗环+周加粗环+直观数值) → 账号**
 | 指标 | 说明 | 数据来源 |
 |---|---|---|
 | ⬓ **Token** | 本会话累计消耗（`input + cache_read + output`），M 单位显示 | `transcript.jsonl` |
 | ⚡ **TPS** | 纯解码速度（`output_tokens ÷ streaming_seconds`，扣除首字等待），带呼吸动态指示 | Language Server RPC |
-| ◯ **上下文** | 圆环百分比，按**官方模型窗口**计算（Gemini 3/4 = 1,048,576；Claude = 200K；GPT-OSS = 128K） | `transcript.jsonl` |
+| ◯ **上下文** | 统一 18px 加粗微环（2.6px 线宽），按**官方模型窗口**计算（Gemini 3/4 = 1,048,576；Claude = 200K；GPT-OSS = 128K） | `transcript.jsonl` |
 | 🗄 **缓存命中** | 最近一次模型调用的 prompt cache 命中率，带 4 分钟过期变色预警 | `transcript.jsonl` |
+| ◯ **额度** | **统一加粗双微环（Scheme B）**：`5h` + [微环] + `70%` · `周` + [微环] + `92%`；系统级翡翠绿与三级阈值变色，悬停展开精确倒计时卡片 | `RetrieveUserQuotaSummary` RPC |
 | 👤 **账号** | 当前账号显示；点击弹出账号面板，已备份 token 的账号**免重启热切换** | Windows Credential Manager |
-| 📏 **额度** | **单槽上下对向双游标**（▼ 5h 天蓝 / ▲ 周额度 翡翠绿）；悬停展开精确倒计时卡片 | `RetrieveUserQuotaSummary` RPC |
 ### 账号热切换
 ![账号面板](docs/account-panel.png)
 状态条上的 **账号** 项显示当前登录的 Google 账号（邮箱前缀），点击弹出账号面板：

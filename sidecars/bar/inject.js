@@ -5,7 +5,7 @@
 //  2. 全局只允许一个 #agy-minibar-host；
 //  3. 只改文本与 SVG 属性，不做结构性增删。
 (() => {
-  const VER = 36;
+  const VER = 38;
   const HOST_ID = 'agy-minibar-host';
   if (window.__AGY_MINIBAR && window.__AGY_MINIBAR.ver === VER) return;
 
@@ -33,6 +33,7 @@
     .v.bad { color: var(--c-bad); }
     .q-slash { opacity: .35; font-weight: normal; margin: 0 1px; }
     .quota-cell { cursor: pointer; pointer-events: auto; }
+    .q-dot { color: var(--c-sep); opacity: .7; font-size: 11px; margin: 0 1px; user-select: none; }
     .q-bar-wrap {
       position: relative;
       width: 52px;
@@ -249,8 +250,8 @@
     }
     .lc-btn:hover { background: var(--c-hover); }
     .lc-x { color: var(--c-key); cursor: pointer; padding: 0 4px; }
-    .ring { width: 18px; height: 18px; flex: 0 0 18px; display: block; }
-    .ring .tr { stroke: var(--c-sep); opacity: .5; }
+    .ring { width: 18px; height: 18px; flex: 0 0 18px; display: inline-block; vertical-align: middle; }
+    .ring .tr { stroke: var(--c-sep); opacity: .55; }
     .ring .fl { stroke-linecap: round; transition: stroke-dashoffset .35s ease, stroke .3s ease; }
   `;
 
@@ -356,34 +357,51 @@
     return e;
   }
 
-  /* ---- 上下文圆环 ---- */
-  const R = 5.6, C = 2 * Math.PI * R;
-  const ring = svgEl(15, 15);
-  ring.setAttribute('class', 'ring');
-  const rg = document.createElementNS(NS, 'g');
-  rg.setAttribute('transform', 'rotate(-90 7.5 7.5)');
-  const trk = document.createElementNS(NS, 'circle');
-  trk.setAttribute('class', 'tr');
-  ['cx:7.5', 'cy:7.5', `r:${R}`].forEach(a => { const [k, v] = a.split(':'); trk.setAttribute(k, v); });
-  trk.setAttribute('fill', 'none');
-  trk.setAttribute('stroke-width', '1.7');
-  const fl = document.createElementNS(NS, 'circle');
-  fl.setAttribute('class', 'fl');
-  ['cx:7.5', 'cy:7.5', `r:${R}`].forEach(a => { const [k, v] = a.split(':'); fl.setAttribute(k, v); });
-  fl.setAttribute('fill', 'none');
-  fl.setAttribute('stroke-width', '1.7');
-  fl.setAttribute('stroke-dasharray', String(C));
-  fl.setAttribute('stroke-dashoffset', String(C));
-  rg.appendChild(trk);
-  rg.appendChild(fl);
-  ring.appendChild(rg);
+  /* ---- 通用圆环生成器 (统一 18x18px, R=5.4, 粗细 2.6px 加粗) ---- */
+  const R = 5.4, C = 2 * Math.PI * R;
+  function makeRing() {
+    const ring = svgEl(16, 16);
+    ring.setAttribute('class', 'ring');
+    const rg = document.createElementNS(NS, 'g');
+    rg.setAttribute('transform', 'rotate(-90 8 8)');
+    const trk = document.createElementNS(NS, 'circle');
+    trk.setAttribute('class', 'tr');
+    ['cx:8', 'cy:8', `r:${R}`].forEach(a => { const [k, v] = a.split(':'); trk.setAttribute(k, v); });
+    trk.setAttribute('fill', 'none');
+    trk.setAttribute('stroke-width', '2.6');
+    const fl = document.createElementNS(NS, 'circle');
+    fl.setAttribute('class', 'fl');
+    ['cx:8', 'cy:8', `r:${R}`].forEach(a => { const [k, v] = a.split(':'); fl.setAttribute(k, v); });
+    fl.setAttribute('fill', 'none');
+    fl.setAttribute('stroke-width', '2.6');
+    fl.setAttribute('stroke-dasharray', String(C));
+    fl.setAttribute('stroke-dashoffset', String(C));
+    fl.setAttribute('stroke', 'var(--c-ok)');
+    rg.appendChild(trk);
+    rg.appendChild(fl);
+    ring.appendChild(rg);
+    return { ring, trk, fl };
+  }
 
+  function setRingProgress(flNode, v, t) {
+    if (v === null || v === undefined) {
+      flNode.setAttribute('stroke-dashoffset', String(C));
+      flNode.setAttribute('stroke', 'var(--c-sep)');
+      return;
+    }
+    const p = Math.max(0, Math.min(100, v));
+    const draw = p > 0 && p < 2 ? 2 : p;
+    flNode.setAttribute('stroke-dashoffset', String(C * (1 - draw / 100)));
+    flNode.setAttribute('stroke', t === 'bad' ? 'var(--c-bad)' : t === 'warn' ? 'var(--c-warn)' : 'var(--c-ok)');
+  }
+
+  /* ---- 上下文圆环 ---- */
+  const ringCtx = makeRing();
   const gCtx = el('div', 'i');
-  gCtx.appendChild(ring);
+  gCtx.appendChild(ringCtx.ring);
   gCtx.appendChild(el('span', 'n', '上下文'));
   const vCtx = el('span', 'v', '—');
   gCtx.appendChild(vCtx);
-  // 上下文圆环不在此处入列，等普通项创建完后按目标顺序插入
 
   function sep() { const s = el('i', 'sep'); bar.appendChild(s); return s; }
 
@@ -401,39 +419,45 @@
   sep(); const cTps = cell('TPS', I_BOLT, '');
   const cTpsDot = el('span', 'pulse-dot');
   cTps.g.insertBefore(cTpsDot, cTps.v);
-  // Token → TPS 之后插入上下文圆环，再接其余三项
+  // Token → TPS 之后插入上下文圆环，再接缓存与额度
   sep(); bar.appendChild(gCtx);
   sep(); const cCache = cell('缓存命中', I_CACHE, 'ok');
-  sep(); const cQuota = cell('额度', I_QUOTA, '');
-  cQuota.g.classList.add('quota-cell');
-  cQuota.g.addEventListener('mouseenter', showQuotaCard);
-  cQuota.g.addEventListener('mouseleave', scheduleCloseQuotaCard);
 
-  // 永久保留的单条双游标 DOM 结构（直接修改属性，禁止在 tick 中重建，彻底杜绝重绘闪烁）
-  const qBarWrap = el('div', 'q-bar-wrap');
-  const qTrack = el('div', 'q-track');
-  const qFill = el('div', 'q-fill');
-  qTrack.appendChild(qFill);
-  const qPtrH5 = el('div', 'q-ptr-h5');
-  const qPtrWk = el('div', 'q-ptr-wk');
-  qBarWrap.appendChild(qTrack);
-  qBarWrap.appendChild(qPtrH5);
-  qBarWrap.appendChild(qPtrWk);
-  cQuota.v.textContent = '';
-  cQuota.v.appendChild(qBarWrap);
+  /* ---- 额度单元格 (Scheme B: 5h+环+数值 · 周+环+数值，统一规格与颜色) ---- */
+  const cQuota = el('div', 'i quota-cell');
+  cQuota.addEventListener('mouseenter', showQuotaCard);
+  cQuota.addEventListener('mouseleave', scheduleCloseQuotaCard);
+
+  const lblH5 = el('span', 'n', '5h');
+  const ringH5 = makeRing();
+  const vH5 = el('span', 'v', '—');
+
+  const qSep = el('span', 'q-dot', '·');
+
+  const lblWk = el('span', 'n', '周');
+  const ringWk = makeRing();
+  const vWk = el('span', 'v', '—');
+
+  cQuota.appendChild(lblH5);
+  cQuota.appendChild(ringH5.ring);
+  cQuota.appendChild(vH5);
+  cQuota.appendChild(qSep);
+  cQuota.appendChild(lblWk);
+  cQuota.appendChild(ringWk.ring);
+  cQuota.appendChild(vWk);
+  sep(); bar.appendChild(cQuota);
 
   const cErr = el('span', 'err-badge');
   bar.appendChild(cErr);
 
-  /* ---- 额度对向标尺与悬停卡片 ---- */
-  const COLOR_H5_DEF = '#38bdf8'; // 天蓝 (5h)
-  const COLOR_WK_DEF = '#34d399'; // 翡翠绿 (周额度)
+  /* ---- 额度悬停卡片与通用颜色 ---- */
+  const COLOR_DEF = '#4ecb8a'; // 统一翡翠绿 (与上下文圆环及系统 ok 色统一)
 
-  function getQuotaColor(val, def) {
-    if (typeof val !== 'number' || !isFinite(val)) return def;
+  function getQuotaColor(val) {
+    if (typeof val !== 'number' || !isFinite(val)) return COLOR_DEF;
     if (val < 20) return '#ef4444';
     if (val < 40) return '#f59e0b';
-    return def;
+    return COLOR_DEF;
   }
 
   let quotaCard = null;
@@ -532,8 +556,8 @@
   }
 
   function placeQuotaCard() {
-    if (!quotaCard || !cQuota.g) return;
-    const r = cQuota.g.getBoundingClientRect();
+    if (!quotaCard || !cQuota) return;
+    const r = cQuota.getBoundingClientRect();
     quotaCard.style.visibility = 'hidden';
     quotaCard.style.display = 'block';
     requestAnimationFrame(() => {
@@ -556,8 +580,8 @@
     const x = lastQuotaData;
     const h5Val = typeof x.h5 === 'number' && isFinite(x.h5) ? Math.round(x.h5) : null;
     const wkVal = typeof x.wk === 'number' && isFinite(x.wk) ? Math.round(x.wk) : null;
-    const colH5 = getQuotaColor(h5Val, COLOR_H5_DEF);
-    const colWk = getQuotaColor(wkVal, COLOR_WK_DEF);
+    const colH5 = getQuotaColor(h5Val);
+    const colWk = getQuotaColor(wkVal);
 
     qcNodes.dot.style.background = colH5;
     qcNodes.pool.textContent = x.model ? (x.model.length > 18 ? x.model.slice(0, 16) + '…' : x.model) : '当前配额池';
@@ -756,11 +780,7 @@
   const pct = n => (typeof n === 'number' && isFinite(n) ? Math.round(n) + '%' : '—');
 
   function setRing(v, t) {
-    const p = typeof v === 'number' && isFinite(v) ? Math.max(0, Math.min(100, v)) : 0;
-    // 极小占比也留一点可见弧，避免看起来像空环
-    const draw = p > 0 && p < 2 ? 2 : p;
-    fl.setAttribute('stroke-dashoffset', String(C * (1 - draw / 100)));
-    fl.setAttribute('stroke', t === 'bad' ? 'var(--c-bad)' : t === 'warn' ? 'var(--c-warn)' : 'var(--c-ok)');
+    setRingProgress(ringCtx.fl, v, t);
   }
 
   let themed = null;
@@ -897,38 +917,21 @@
     lastQuotaData = x;
     if (quotaCard) renderQuotaCard();
 
-    // 整合额度展示：直接更新永久 DOM 属性，绝不重建 DOM，零闪烁
+    // 整合额度展示：Scheme B (5h+加粗环+数值 · 周+加粗环+数值，统一翡翠绿与阈值变色)
     const h5Val = typeof x.h5 === 'number' && isFinite(x.h5) ? Math.round(x.h5) : null;
     const wkVal = typeof x.wk === 'number' && isFinite(x.wk) ? Math.round(x.wk) : null;
-    const colH5 = getQuotaColor(h5Val, COLOR_H5_DEF);
-    const colWk = getQuotaColor(wkVal, COLOR_WK_DEF);
+    const tH5 = h5Val === null ? '' : h5Val < 20 ? 'bad' : h5Val < 40 ? 'warn' : '';
+    const tWk = wkVal === null ? '' : wkVal < 20 ? 'bad' : wkVal < 40 ? 'warn' : '';
 
-    if (h5Val === null && wkVal === null) {
-      qBarWrap.style.display = 'none';
-    } else {
-      qBarWrap.style.display = 'inline-flex';
-      const minVal = Math.min(h5Val !== null ? h5Val : 100, wkVal !== null ? wkVal : 100);
-      qFill.style.width = minVal + '%';
+    setRingProgress(ringH5.fl, h5Val, tH5);
+    setRingProgress(ringWk.fl, wkVal, tWk);
 
-      if (h5Val !== null) {
-        qPtrH5.style.display = 'block';
-        qPtrH5.style.left = `calc(${h5Val}% - 3px)`;
-        qPtrH5.style.borderTopColor = colH5;
-        qPtrH5.style.filter = `drop-shadow(0 0 2px ${colH5})`;
-      } else {
-        qPtrH5.style.display = 'none';
-      }
+    vH5.textContent = pct(h5Val);
+    tone(vH5, tH5);
 
-      if (wkVal !== null) {
-        qPtrWk.style.display = 'block';
-        qPtrWk.style.left = `calc(${wkVal}% - 3px)`;
-        qPtrWk.style.borderBottomColor = colWk;
-        qPtrWk.style.filter = `drop-shadow(0 0 2px ${colWk})`;
-      } else {
-        qPtrWk.style.display = 'none';
-      }
-    }
-    cQuota.g.removeAttribute('title');
+    vWk.textContent = pct(wkVal);
+    tone(vWk, tWk);
+    cQuota.removeAttribute('title');
 
     // 异常主动捕获与轻量报警 Badge
     if (x.errorNotice && x.errorNotice.badge) {
