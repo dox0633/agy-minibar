@@ -1,13 +1,13 @@
 # Antigravity MiniBar
 **输入框正下方的一行极简实时状态条** —— 在你打字的地方，一眼看全当前会话的健康度。
 English | [简体中文](#功能一览)
-[![CI](https://github.com/dox0633/agy-minibar/actions/workflows/ci.yml/badge.svg)](https://github.com/dox0633/agy-minibar/actions/workflows/ci.yml)`n[![Version](https://img.shields.io/badge/version-1.3.0-blue)](CHANGELOG.md)`n[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![CI](https://github.com/dox0633/agy-minibar/actions/workflows/ci.yml/badge.svg)](https://github.com/dox0633/agy-minibar/actions/workflows/ci.yml)`n[![Version](https://img.shields.io/badge/version-1.4.0-blue)](CHANGELOG.md)`n[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)](#安装)
 [![Antigravity](https://img.shields.io/badge/host-Antigravity%202.0%20Desktop-orange)](#适用对象)
 [![Deps](https://img.shields.io/badge/dependencies-zero-success)](#工作原理)
 ![MiniBar 效果图](docs/minibar.png)
 ```
-⬓ Token 2.70M  ⇄ 轮数 6  ⚡ TPS 68  ◯ 上下文 12%  🗄 缓存命中 95%  🕐 5小时 92%  📅 周额度 88%
+⬓ Token 2.70M  ⇄ 轮数 6  ⚡ TPS 68  ◯ 上下文 12%  🗄 缓存命中 95%  👤 account  🕒 额度 92%/88%
 ```
 ---
 ## 这是什么
@@ -19,7 +19,7 @@ Google **Antigravity 2.0 桌面版**原生不显示任何会话状态——上�
 - **纯本地**：只读取本机 transcript 日志和本地 Language Server RPC，不向任何外部服务发送数据
 - **不改 asar**：通过官方 sidecar 插件机制 + CDP 注入，Antigravity 升级后无需重新适配
 ## 功能一览
-显示顺序：**Token → 轮数 → TPS → 上下文 → 缓存命中 → 5小时 → 周额度**
+显示顺序：**Token → 轮数 → TPS (呼吸点) → 上下文 → 缓存命中 → 账号 → 额度 (5h/周)**
 | 指标 | 说明 | 数据来源 |
 |---|---|---|
 | ⬓ **Token** | 本会话累计消耗（`input + cache_read + output`），M 单位显示 | `transcript.jsonl` |
@@ -96,7 +96,7 @@ git clone https://github.com/dox0633/agy-minibar.git ~/.gemini/config/plugins/ag
 ### 验证
 向 Antigravity 发送任意一条消息，等第一段回复流式输出完成，状态条应显示：
 ```
-⬓ Token x.xxM  ⇄ 轮数 n  ⚡ TPS n  ◯ 上下文 x%  🗄 缓存命中 n%  🕐 5小时 n%  📅 周额度 n%
+⬓ Token x.xxM  ⇄ 轮数 n  ⚡ TPS n  ◯ 上下文 x%  🗄 缓存命中 n%  👤 account  🕒 额度 n%/n%
 ```
 ## 工作原理
 ```

@@ -235,6 +235,8 @@ async function discoverLsConnection(force = false) {
   return lsConn.base ? lsConn : null;
 }
 
+let lastRpcError = { code: 0, text: '', at: 0 };
+
 function postHttp(base, method, body, csrf, timeout = 4000) {
   let payload;
   try { payload = JSON.stringify(body || {}); } catch { return Promise.resolve({ ok: false }); }
@@ -257,7 +259,12 @@ function postHttp(base, method, body, csrf, timeout = 4000) {
       let n = 0;
       res.on('data', c => { n += c.length; if (n > 8e6) { req.destroy(); return fin({ ok: false, status: res.statusCode }); } text += c; });
       res.on('end', () => {
-        if (res.statusCode !== 200) return fin({ ok: false, status: res.statusCode });
+        if (res.statusCode !== 200) {
+          if (res.statusCode === 429) lastRpcError = { code: 429, text: '请求限流 (429)', at: Date.now() };
+          else if (res.statusCode === 401) lastRpcError = { code: 401, text: '鉴权失效 (401)', at: Date.now() };
+          return fin({ ok: false, status: res.statusCode });
+        }
+        lastRpcError = { code: 0, text: '', at: 0 };
         try { fin({ ok: true, data: JSON.parse(text) }); } catch { fin({ ok: false, status: 200, parseErr: true }); }
       });
     });
@@ -303,6 +310,20 @@ function winOf(b) {
   return '';
 }
 
+function formatResetTime(iso) {
+  if (!iso) return '';
+  const diffMs = Date.parse(iso) - Date.now();
+  if (isNaN(diffMs) || diffMs <= 0) return '';
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  if (hours < 24) return remMins > 0 ? `${hours}h ${remMins}m` : `${hours}h`;
+  const days = Math.floor(hours / 24);
+  const remHours = hours % 24;
+  return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
+}
+
 async function quota(model = '') {
   const now = Date.now();
   // 缓存 15 秒（模型改变时立即刷新）
@@ -336,9 +357,16 @@ async function quota(model = '') {
 
   const pick = w => {
     const hit = pool.find(b => winOf(b) === w);
-    return hit ? frac(hit) : null;
+    return hit ? { pct: frac(hit), reset: formatResetTime(hit.resetTime) } : null;
   };
-  const d = { h5: pick('5h'), wk: pick('weekly') };
+  const h5Obj = pick('5h');
+  const wkObj = pick('weekly');
+  const d = {
+    h5: h5Obj ? h5Obj.pct : null,
+    h5Reset: h5Obj ? h5Obj.reset : '',
+    wk: wkObj ? wkObj.pct : null,
+    wkReset: wkObj ? wkObj.reset : '',
+  };
   S.q = { d, at: now, model };
   return d;
 }
@@ -354,7 +382,7 @@ function modelWindow(name) {
 }
 
 async function stats(convId) {
-  const o = { convId, ctxPct: null, compactPct: null, cachePct: null, tps: null, ttft: null, turns: 0, model: '', h5: null, wk: null, live: false };
+  const o = { convId, ctxPct: null, compactPct: null, cachePct: null, tps: null, ttft: null, turns: 0, model: '', h5: null, wk: null, live: false, cacheAgeSec: 0, isGenerating: false, contextUsed: 0, modelLimit: 1048576 };
   if (!convId || !ID_RE.test(convId)) return o;
 
   const loc = resolveTranscriptFile(convId);
@@ -392,6 +420,8 @@ async function stats(convId) {
     const sp = latest.speed || null;
     const model = (sp && sp.model) || c.sum.modelHint || '';
     o.model = model;
+    o.contextUsed = used;
+    o.modelLimit = modelWindow(model);
     // 圆环百分比按官方模型窗口算；颜色风险按 256K 自动压缩线算
     o.ctxPct = Math.min(100, used / modelWindow(model) * 100);
     o.compactPct = Math.min(100, used / FIXED_LIMIT_TOKENS * 100);
@@ -401,7 +431,10 @@ async function stats(convId) {
       o.ttft = Number.isFinite(sp.ttftSec) ? sp.ttftSec : null;
     }
   }
-  o.live = Date.now() - (st.mtimeMs || 0) < 20000;
+  const ageSec = Math.max(0, Math.round((Date.now() - (st.mtimeMs || 0)) / 1000));
+  o.cacheAgeSec = ageSec;
+  o.isGenerating = (Date.now() - (st.mtimeMs || 0)) < 3500 && (o.tps !== null || o.turns > 0);
+  o.live = ageSec < 20;
   return o;
 }
 
@@ -593,12 +626,25 @@ async function tick() {
     let q = { h5: null, wk: null };
     try { q = (await quota(st.model)) || q; } catch {}
 
+    let errorNotice = null;
+    if (lastRpcError.code && (Date.now() - lastRpcError.at < 15000)) {
+      errorNotice = { badge: lastRpcError.text, detail: `Language Server: ${lastRpcError.text}` };
+    } else if (q && q.h5 === 0) {
+      errorNotice = { badge: '5h额度耗尽', detail: '当前模型 5 小时额度已耗尽 (0%)' };
+    } else if (q && q.wk === 0) {
+      errorNotice = { badge: '周额度耗尽', detail: '当前模型每周额度已耗尽 (0%)' };
+    }
+
     const payload = {
       convId: S.convId,
       model: st.model || '',
       ctxPct: st.ctxPct,
       compactPct: st.compactPct,
       cachePct: st.cachePct,
+      cacheAgeSec: st.cacheAgeSec || 0,
+      isGenerating: st.isGenerating || false,
+      contextUsed: st.contextUsed || 0,
+      modelLimit: st.modelLimit || 1048576,
       tps: st.tps,
       ttft: st.ttft,
       turns: st.turns,
@@ -608,7 +654,10 @@ async function tick() {
       switchResult: SW.switchResult || null,
       captureResult: SW.captureResult || null,
       h5: q.h5,
+      h5Reset: q.h5Reset || '',
       wk: q.wk,
+      wkReset: q.wkReset || '',
+      errorNotice,
       live: st.live,
     };
 

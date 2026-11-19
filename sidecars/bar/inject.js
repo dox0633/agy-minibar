@@ -5,7 +5,7 @@
 //  2. 全局只允许一个 #agy-minibar-host；
 //  3. 只改文本与 SVG 属性，不做结构性增删。
 (() => {
-  const VER = 28;
+  const VER = 30;
   const HOST_ID = 'agy-minibar-host';
   if (window.__AGY_MINIBAR && window.__AGY_MINIBAR.ver === VER) return;
 
@@ -31,6 +31,37 @@
     .v.ok { color: var(--c-ok); }
     .v.warn { color: var(--c-warn); }
     .v.bad { color: var(--c-bad); }
+    .q-slash { opacity: .35; font-weight: normal; margin: 0 1px; }
+    .pulse-dot {
+      display: inline-block;
+      width: 5px; height: 5px;
+      border-radius: 50%;
+      margin-right: 4px;
+      background: var(--c-sep);
+      vertical-align: middle;
+      transition: all .2s;
+    }
+    .pulse-dot.generating {
+      animation: agy-pulse 1.2s infinite ease-in-out;
+    }
+    .pulse-dot.fast { color: #34a853; background: #34a853; }
+    .pulse-dot.medium { color: #fbbc04; background: #fbbc04; }
+    .pulse-dot.slow { color: #ea4335; background: #ea4335; }
+    .err-badge {
+      display: none; align-items: center; gap: 4px;
+      font-size: 10px; padding: 1px 6px; border-radius: 4px;
+      background: rgba(234, 67, 53, 0.18);
+      color: #ea4335;
+      border: 1px solid rgba(234, 67, 53, 0.35);
+      cursor: default; pointer-events: auto;
+      margin-left: 5px;
+      animation: agy-pulse 1.8s infinite ease-in-out;
+    }
+    @keyframes agy-pulse {
+      0% { transform: scale(0.85); opacity: 0.5; }
+      50% { transform: scale(1.35); opacity: 1; filter: drop-shadow(0 0 3px currentColor); }
+      100% { transform: scale(0.85); opacity: 0.5; }
+    }
     .ic { width: 13px; height: 13px; flex: 0 0 13px; display: block; opacity: .85; }
     .sep { width: 1px; height: 10px; background: var(--c-sep); flex: 0 0 1px; opacity: .5; }
     .acc { cursor: pointer; pointer-events: auto; }
@@ -148,6 +179,11 @@
     s.appendChild(pth('M4 10h16'));
     s.appendChild(pth('M8 3v4M16 3v4'));
   });
+  const I_QUOTA = () => icon(s => {
+    s.appendChild(pth('M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z'));
+    s.appendChild(pth('M12 7v5l3 2'));
+    s.appendChild(pth('M8 17h8'));
+  });
   const I_USER = () => icon(s => {
     s.appendChild(pth('M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z'));
     s.appendChild(pth('M4.5 20a7.5 7.5 0 0 1 15 0'));
@@ -246,11 +282,14 @@
   sep(); const cTok = cell('Token', I_TOKEN, '');
   sep(); const cTurns = cell('轮数', I_LOOP, '');
   sep(); const cTps = cell('TPS', I_BOLT, '');
+  const cTpsDot = el('span', 'pulse-dot');
+  cTps.g.insertBefore(cTpsDot, cTps.v);
   // Token → 轮数 → TPS 之后插入上下文圆环，再接其余三项
   sep(); bar.appendChild(gCtx);
   sep(); const cCache = cell('缓存命中', I_CACHE, 'ok');
-  sep(); const cH5 = cell('5小时', I_CLOCK, '');
-  sep(); const cWk = cell('周额度', I_CAL, '');
+  sep(); const cQuota = cell('额度', I_QUOTA, '');
+  const cErr = el('span', 'err-badge');
+  bar.appendChild(cErr);
 
   /* ---- 账号项（可点击，弹账号面板）----
    * 免 fetch 通道：accounts 数据由 sidecar 在 payload 下行；点击把
@@ -268,8 +307,8 @@
     accBtn.appendChild(el('span', 'n', '账号'));
     vAcc = el('span', 'v', '—');
     accBtn.appendChild(vAcc);
-    const h5 = cH5.g;
-    if (h5 && h5.parentNode) h5.parentNode.insertBefore(accBtn, h5);
+    const target = cQuota.g;
+    if (target && target.parentNode) target.parentNode.insertBefore(accBtn, target);
     else bar.appendChild(accBtn);
     gAcc = accBtn;
     accBtn.addEventListener('click', (ev) => {
@@ -449,15 +488,50 @@
     vCtx.textContent = pct(phys);
     tone(vCtx, t);
 
+    // 上下文悬浮详细说明
+    const usedTok = x.contextUsed || 0;
+    const limitTok = x.modelLimit || 1048576;
+    const usedStr = (usedTok >= 1e6 ? (usedTok / 1e6).toFixed(2) + 'M' : (usedTok / 1000).toFixed(1) + 'k');
+    const limitStr = (limitTok >= 1e6 ? (limitTok / 1e6).toFixed(1) + 'M' : (limitTok / 1000).toFixed(0) + 'k');
+    gCtx.title = `上下文窗口: ${usedStr} / ${limitStr} (${pct(x.ctxPct)}) | 自动压缩线: 256k (${pct(x.compactPct)})`;
+
+    // 缓存时效颜色预警（距上一轮对话时长）
     cCache.v.textContent = pct(x.cachePct);
+    const ageSec = typeof x.cacheAgeSec === 'number' ? x.cacheAgeSec : 0;
+    if (ageSec >= 240) {
+      cCache.v.className = 'v bad';
+      cCache.g.title = `缓存命中率 ${pct(x.cachePct)} | 缓存已过期 (距上一轮 ${Math.floor(ageSec / 60)} 分钟，下一次提问将全量Prefill)`;
+    } else if (ageSec >= 180) {
+      cCache.v.className = 'v warn';
+      cCache.g.title = `缓存命中率 ${pct(x.cachePct)} | 缓存即将失效 (距上一轮 ${Math.floor(ageSec / 60)} 分钟，满4分钟失效)`;
+    } else {
+      cCache.v.className = 'v ok';
+      cCache.g.title = `缓存命中率 ${pct(x.cachePct)} | 缓存处于新鲜期`;
+    }
     // Token 合计：本会话累计 (input + cache_read + output)，M 单位
     cTok.v.textContent = typeof x.tokensM === 'number' && isFinite(x.tokensM) && x.tokensM > 0
       ? (x.tokensM >= 10 ? x.tokensM.toFixed(1) + 'M' : (x.tokensM < 0.01 ? (x.tokensM * 1000).toFixed(0) + 'k' : x.tokensM.toFixed(2) + 'M'))
       : '—';
+    // TPS 呼吸点动效与状态
+    const isGen = Boolean(x.isGenerating);
+    const tpsVal = typeof x.tps === 'number' && isFinite(x.tps) ? x.tps : 0;
+    let speedTier = 'fast';
+    if (tpsVal > 0 && tpsVal < 12) speedTier = 'slow';
+    else if (tpsVal >= 12 && tpsVal < 30) speedTier = 'medium';
+
+    if (isGen) {
+      cTpsDot.className = `pulse-dot generating ${speedTier}`;
+    } else if (tpsVal > 0) {
+      cTpsDot.className = `pulse-dot ${speedTier}`;
+    } else {
+      cTpsDot.className = 'pulse-dot';
+    }
+
     // TPS = 纯解码速度（output_tokens / streaming_seconds），与 DSH 下方 tok/s 同口径
     cTps.v.textContent = typeof x.tps === 'number' && isFinite(x.tps) && x.tps > 0 ? x.tps.toFixed(0) : '—';
-    if (x.ttft) cTps.g.title = '纯生成速度 ' + (x.tps > 0 ? x.tps.toFixed(1) : '—') + ' tok/s | 首字响应 ' + x.ttft.toFixed(2) + 's' + (x.model ? ' (' + x.model + ')' : '');
-    else if (x.model) cTps.g.title = '模型: ' + x.model;
+    const statusText = isGen ? '正在生成... ' : '';
+    if (x.ttft) cTps.g.title = statusText + '纯生成速度 ' + (x.tps > 0 ? x.tps.toFixed(1) : '—') + ' tok/s | 首字响应 ' + x.ttft.toFixed(2) + 's' + (x.model ? ' (' + x.model + ')' : '');
+    else if (x.model) cTps.g.title = statusText + '模型: ' + x.model + (x.tps > 0 ? ' (' + x.tps.toFixed(1) + ' tok/s)' : '');
     cTurns.v.textContent = typeof x.turns === 'number' && isFinite(x.turns) && x.turns > 0 ? String(Math.round(x.turns)) : '—';
     // 账号项：显示 payload 下行的账号与账号列表快照
     ensureAccountCell();
@@ -487,11 +561,39 @@
       }
     }
     if (panel) renderPanel();
-    cH5.v.textContent = pct(x.h5);
-    tone(cH5.v, typeof x.h5 === 'number' && x.h5 < 20 ? 'bad' : '');
-    cH5.g.title = '5小时额度剩余' + (x.h5 != null ? ' ' + Math.round(x.h5) + '%' : '');
-    cWk.v.textContent = pct(x.wk);
-    cWk.g.title = '周额度剩余' + (x.wk != null ? ' ' + Math.round(x.wk) + '%' : '');
+    // 整合额度展示：5h% / 周%（或无 5h 时自适应单显），节省横向空间
+    const h5Val = typeof x.h5 === 'number' && isFinite(x.h5) ? Math.round(x.h5) : null;
+    const wkVal = typeof x.wk === 'number' && isFinite(x.wk) ? Math.round(x.wk) : null;
+    const h5Bad = h5Val !== null && h5Val < 20;
+    const wkBad = wkVal !== null && wkVal < 20;
+
+    let qHtml = '';
+    if (h5Val !== null && wkVal !== null) {
+      qHtml = `<span style="${h5Bad ? 'color:var(--c-bad)' : ''}">${h5Val}%</span><span class="q-slash">/</span><span style="${wkBad ? 'color:var(--c-bad)' : ''}">${wkVal}%</span>`;
+    } else if (wkVal !== null) {
+      qHtml = `<span style="${wkBad ? 'color:var(--c-bad)' : ''}">${wkVal}%</span>`;
+    } else if (h5Val !== null) {
+      qHtml = `<span style="${h5Bad ? 'color:var(--c-bad)' : ''}">${h5Val}%</span>`;
+    } else {
+      qHtml = '—';
+    }
+    cQuota.v.innerHTML = qHtml;
+
+    // 悬停 Tooltip：详尽展示两项倒计时与当前额度池
+    const h5Tip = h5Val !== null ? `5小时额度: ${h5Val}%` + (x.h5Reset ? ` (重置倒计时: ${x.h5Reset})` : '') : '5小时额度: 不限/无';
+    const wkTip = wkVal !== null ? `每周额度: ${wkVal}%` + (x.wkReset ? ` (重置倒计时: ${x.wkReset})` : '') : '每周额度: 不限/无';
+    const poolTip = x.model ? ` | 当前模型: ${x.model}` : '';
+    cQuota.g.title = `${h5Tip}
+${wkTip}${poolTip}`;
+
+    // 异常主动捕获与轻量报警 Badge
+    if (x.errorNotice && x.errorNotice.badge) {
+      cErr.style.display = 'inline-flex';
+      cErr.textContent = '⚠️ ' + x.errorNotice.badge;
+      cErr.title = x.errorNotice.detail || x.errorNotice.badge;
+    } else {
+      cErr.style.display = 'none';
+    }
 
     // 上行：pending 指令回传给 sidecar（含消费标记，避免 sidecar 重复执行）
     return {
