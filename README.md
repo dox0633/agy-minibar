@@ -1,7 +1,9 @@
 # Antigravity MiniBar
 **输入框正下方的一行极简实时状态条** —— 在你打字的地方，一眼看全当前会话的健康度。
 English | [简体中文](#功能一览)
-[![CI](https://github.com/dox0633/agy-minibar/actions/workflows/ci.yml/badge.svg)](https://github.com/dox0633/agy-minibar/actions/workflows/ci.yml)`n[![Version](https://img.shields.io/badge/version-1.5.2-blue)](CHANGELOG.md)`n[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![CI](https://github.com/dox0633/agy-minibar/actions/workflows/ci.yml/badge.svg)](https://github.com/dox0633/agy-minibar/actions/workflows/ci.yml)
+[![Version](https://img.shields.io/badge/version-1.7.0-blue)](CHANGELOG.md)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)](#安装)
 [![Antigravity](https://img.shields.io/badge/host-Antigravity%202.0%20Desktop-orange)](#适用对象)
 [![Deps](https://img.shields.io/badge/dependencies-zero-success)](#工作原理)
@@ -22,7 +24,7 @@ Google **Antigravity 2.0 桌面版**原生不显示任何会话状态——上�
 显示顺序：**Token → TPS (呼吸点) → 上下文 (加粗微环) → 缓存命中 → 账号 → 额度 (5h加粗环+周加粗环+直观数值)**
 | 指标 | 说明 | 数据来源 |
 |---|---|---|
-| ⬓ **Token** | 本会话累计消耗（`input + cache_read + output`），M 单位显示 | `transcript.jsonl` |
+| ⬓ **Token** | 本会话累计消耗（M/k 单位），悬停呼出三维统计卡片：**日用量**（每日0点刷新）、**周用量**（周一0点刷新）、**月用量**（每月1号0点刷新）及 Brain 全会话聚合 | `transcript.jsonl` 本地聚合 |
 | ⚡ **TPS** | 纯解码速度（`output_tokens ÷ streaming_seconds`，扣除首字等待），带呼吸动态指示 | Language Server RPC |
 | ◯ **上下文** | 统一 18px 加粗微环（2.6px 线宽），按**官方模型窗口**计算（Gemini 3/4 = 1,048,576；Claude = 200K；GPT-OSS = 128K） | `transcript.jsonl` |
 | 🗄 **缓存命中** | 最近一次模型调用的 prompt cache 命中率，带 4 分钟过期变色预警 | `transcript.jsonl` |

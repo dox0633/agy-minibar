@@ -5,7 +5,7 @@
  */
 
 import { exec, execSync, spawn } from 'node:child_process';
-import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
 import { homedir } from 'node:os';
@@ -13,7 +13,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   FIXED_LIMIT_TOKENS, ID_RE, buildSpeedIndex, enrichSummaryWithSpeed,
-  parseTranscriptText, readTranscriptFile, resolveTranscriptFile, safeStat,
+  parseTranscriptText, readTranscriptFile, resolveTranscriptFile, safeStat, findAllBrainDirs,
 } from './lib/transcript.mjs';
 import {
   loadLibrary, upsertAccount, getAccount, readActiveEmail, readActiveBlob, writeActiveBlobFile,
@@ -158,6 +158,103 @@ function scanIncrement(file) {
     c.offset += Buffer.byteLength(complete, 'utf8');
     return c;
   } catch { return null; }
+}
+
+/* ---------------- Token 用量统计（日 / 周 / 月） ---------------- */
+
+let tokenAggCache = {
+  day: 0,
+  week: 0,
+  month: 0,
+  scannedAt: 0,
+  fileCache: new Map(),
+};
+
+function getTokenUsage() {
+  const now = new Date();
+  const nowMs = now.getTime();
+
+  // 缓存 4 秒，避免高频 tick 重复扫描
+  if (nowMs - tokenAggCache.scannedAt < 4000 && tokenAggCache.scannedAt > 0) {
+    return {
+      day: tokenAggCache.day,
+      week: tokenAggCache.week,
+      month: tokenAggCache.month,
+    };
+  }
+
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const dayOfWeek = (now.getDay() + 6) % 7; // Monday = 0
+  const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek).getTime();
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+
+  let totalDay = 0;
+  let totalWeek = 0;
+  let totalMonth = 0;
+
+  try {
+    const brainDirs = findAllBrainDirs();
+    for (const bDir of brainDirs) {
+      let convs = [];
+      try { convs = readdirSync(bDir); } catch { continue; }
+      for (const c of convs) {
+        const p = join(bDir, c, '.system_generated', 'logs', 'transcript.jsonl');
+        let st;
+        try { st = statSync(p); } catch { continue; }
+        // 修改时间早于本月 1 号 0 点的文件不可能包含本月 Token，直接跳过
+        if (st.mtimeMs < startOfMonth) continue;
+
+        let cached = tokenAggCache.fileCache.get(p);
+        if (cached && cached.mtimeMs === st.mtimeMs && cached.startOfMonth === startOfMonth && cached.startOfWeek === startOfWeek && cached.startOfToday === startOfToday) {
+          totalDay += cached.day;
+          totalWeek += cached.week;
+          totalMonth += cached.month;
+          continue;
+        }
+
+        let dTok = 0, wTok = 0, mTok = 0;
+        try {
+          const text = readFileSync(p, 'utf-8');
+          const lines = text.split('\n');
+          for (const line of lines) {
+            if (!line.includes('PLANNER_RESPONSE')) continue;
+            try {
+              const obj = JSON.parse(line);
+              if (obj.type !== 'PLANNER_RESPONSE') continue;
+              const ts = Date.parse(obj.created_at);
+              if (isNaN(ts) || ts < startOfMonth) continue;
+              const t = (Number(obj.input_tokens) || 0) + (Number(obj.cache_read_tokens) || 0) + (Number(obj.output_tokens) || 0);
+              mTok += t;
+              if (ts >= startOfWeek) wTok += t;
+              if (ts >= startOfToday) dTok += t;
+            } catch (_) {}
+          }
+        } catch (_) {}
+
+        tokenAggCache.fileCache.set(p, {
+          mtimeMs: st.mtimeMs,
+          day: dTok,
+          week: wTok,
+          month: mTok,
+          startOfToday,
+          startOfWeek,
+          startOfMonth,
+        });
+
+        totalDay += dTok;
+        totalWeek += wTok;
+        totalMonth += mTok;
+      }
+    }
+    tokenAggCache.day = totalDay;
+    tokenAggCache.week = totalWeek;
+    tokenAggCache.month = totalMonth;
+    tokenAggCache.scannedAt = nowMs;
+  } catch (err) {
+    log('TOKEN_AGG_ERR', err.message);
+  }
+
+  return { day: tokenAggCache.day, week: tokenAggCache.week, month: tokenAggCache.month };
 }
 
 /* ---------------- Language Server RPC & 动态发现 ---------------- */
@@ -403,6 +500,9 @@ async function stats(convId) {
     const gm = await rpc('GetCascadeTrajectoryGeneratorMetadata', { cascadeId: convId, generatorMetadataOffset: 0, includeMessages: false });
     if (gm && Array.isArray(gm.generatorMetadata)) {
       try { sum = enrichSummaryWithSpeed(sum, buildSpeedIndex(gm.generatorMetadata)); } catch {}
+    } else if (c && c.sum && c.sum.latest && c.sum.latest.speed) {
+      // 当 LS 重启暂不可用时，继承上一轮成功的 speed 数据，杜绝切号时 TPS 瞬间掉成「—」
+      if (sum && sum.latest) sum.latest.speed = c.sum.latest.speed;
     }
     const speedRetries = (c && c.mtime === st.mtimeMs && c.size === st.size) ? ((c.speedRetries || 0) + 1) : 0;
     c = { mtime: st.mtimeMs, size: st.size, sum, speedRetries };
@@ -627,7 +727,8 @@ async function tick() {
     try { q = (await quota(st.model)) || q; } catch {}
 
     let errorNotice = null;
-    if (lastRpcError.code && (Date.now() - lastRpcError.at < 15000)) {
+    const ignoreRpc = SW.ignoreRpcErrorUntil && Date.now() < SW.ignoreRpcErrorUntil;
+    if (!ignoreRpc && lastRpcError.code && (Date.now() - lastRpcError.at < 15000)) {
       errorNotice = { badge: lastRpcError.text, detail: `Language Server: ${lastRpcError.text}` };
     } else if (q && q.h5 === 0) {
       errorNotice = { badge: '5h额度耗尽', detail: '当前模型 5 小时额度已耗尽 (0%)' };
@@ -649,6 +750,7 @@ async function tick() {
       ttft: st.ttft,
       turns: st.turns,
       tokensM: st.tokensM,
+      tokenUsage: getTokenUsage(),
       account: SW.activeEmail || '',
       accounts: accountsSnapshot(q),
       switchResult: SW.switchResult || null,
@@ -704,6 +806,18 @@ async function tick() {
       const res = await switchToAccount(target);
       SW.switchResult = { ok: Boolean(res.ok), email: res.email || target, error: res.error || '', at: Date.now() };
       log('SWITCH_RESULT', JSON.stringify(SW.switchResult));
+      // 切换完成后立即主动向前台推送最新账号状态与平滑配额，无需等下一轮 tick 循环
+      try {
+        const immPayload = {
+          ...payload,
+          account: SW.activeEmail || target,
+          accounts: accountsSnapshot(S.q.d || q),
+          switchResult: SW.switchResult,
+          h5: S.q.d ? S.q.d.h5 : q.h5,
+          wk: S.q.d ? S.q.d.wk : q.wk,
+        };
+        await cdp.eval(`window.__AGY_MINIBAR && window.__AGY_MINIBAR.update(${JSON.stringify(immPayload)})`);
+      } catch {}
     }
     if (r && r.pendingCapture === true) {
       try {
@@ -785,7 +899,7 @@ async function switchToAccount(email) {
     const acc = getAccount(target);
     if (!acc || !acc.token) return { ok: false, error: 'no token for ' + target + ' — need OAuth login first' };
 
-    // 3) 写凭据 blob（CredWriteW）——先写临时文件再让 PS 读，避免命令行长度与转义问题
+    // 3) 写凭据 blob（CredWriteW）——动态临时文件名防竞争
     const blobJson = JSON.stringify({
       token: acc.token,
       auth_method: acc.auth_method || 'consumer',
@@ -794,7 +908,7 @@ async function switchToAccount(email) {
     });
     const blobDir = LIB_DIR_TEMP();
     mkdirSync(blobDir, { recursive: true });
-    const blobFile = join(blobDir, 'pending-cred.json');
+    const blobFile = join(blobDir, `pending-cred-${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
     writeFileSync(blobFile, blobJson, 'utf-8');
     try {
       writeActiveBlobFile(blobFile);
@@ -832,6 +946,8 @@ async function switchToAccount(email) {
       SW.activeEmail = target;
       return { ok: true, email: target, deferred: true, note: 'credential swapped; LS restart deferred until generation completes' };
     }
+    // 切号重启 LS 期间抑制 8 秒内的 RPC 瞬态错误提示，防界面闪报红标
+    SW.ignoreRpcErrorUntil = Date.now() + 8000;
     try {
       const killed = [];
       const procs = await new Promise((resolve) => {
@@ -861,15 +977,35 @@ async function switchToAccount(email) {
           });
           const blobDir2 = LIB_DIR_TEMP();
           mkdirSync(blobDir2, { recursive: true });
-          const blobFile2 = join(blobDir2, 'pending-cred.json');
+          const blobFile2 = join(blobDir2, `pending-cred-${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
           writeFileSync(blobFile2, blobJson2, 'utf-8');
           writeActiveBlobFile(blobFile2);
           try { unlinkSync(blobFile2); } catch {}
           log('CRED_RE_ASSERT', target);
         }
       } catch (e) { log('CRED_RE_ASSERT_FAIL', e.message); }
-      // 切号后 LS 被杀，宿主拉起新实例：清空旧额度缓存并触发动态发现
-      S.q = { d: null, at: 0, model: '' };
+
+      // 额度平滑：绝不置空 S.q.d 为 null！优先继承目标账号的历史快照，无快照则保留现有额度
+      const targetCached = liveQuotaRecord(target);
+      if (targetCached && typeof targetCached.h5 === 'number' && typeof targetCached.wk === 'number') {
+        S.q.d = { h5: targetCached.h5, wk: targetCached.wk, h5Reset: '—', wkReset: '—' };
+      } else {
+        try {
+          const ideQuotas = ideQuota.readIdeQuotaCache() || {};
+          const iq = ideQuotas[target.toLowerCase()];
+          if (iq && iq.models) {
+            S.q.d = {
+              h5: iq.models['gemini:5h']?.remaining ?? (S.q.d ? S.q.d.h5 : null),
+              wk: iq.models['gemini:weekly']?.remaining ?? (S.q.d ? S.q.d.wk : null),
+              h5Reset: '—',
+              wkReset: '—',
+            };
+          }
+        } catch {}
+      }
+      // 清空时间戳使新 LS 拉起后第一时间拉取最新真实额度，但在此之前 S.q.d 始终保持有效数值
+      S.q.at = 0;
+      S.q.model = '';
       setTimeout(() => { discoverLsConnection(true).catch(() => {}); }, 2500);
     } catch (e) { log('LS_RESTART_FAIL', e.message); }
 

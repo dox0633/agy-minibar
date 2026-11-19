@@ -5,7 +5,7 @@
 //  2. 全局只允许一个 #agy-minibar-host；
 //  3. 只改文本与 SVG 属性，不做结构性增删。
 (() => {
-  const VER = 39;
+  const VER = 41;
   const HOST_ID = 'agy-minibar-host';
   if (window.__AGY_MINIBAR && window.__AGY_MINIBAR.ver === VER) return;
 
@@ -151,6 +151,33 @@
     }
     .qc-time { font-size: 10px; color: var(--c-key); display: flex; justify-content: space-between; margin-top: 1px; }
     .qc-foot { border-top: 1px solid var(--c-sep); margin-top: 8px; padding-top: 6px; display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: var(--c-dim); }
+    .token-cell { cursor: pointer; pointer-events: auto; }
+    .token-cell:hover .v { text-decoration: underline; }
+    .token-card {
+      position: fixed;
+      width: 250px;
+      background: var(--c-panel);
+      border: 1px solid var(--c-sep);
+      border-radius: 10px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.55);
+      padding: 10px 12px;
+      font-family: "Google Sans Flex", system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+      z-index: 2147483150;
+      pointer-events: auto;
+      color: var(--c-val);
+      animation: qc-pop .18s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .tc-head { display: flex; align-items: center; justify-content: space-between; padding-bottom: 6px; border-bottom: 1px solid var(--c-sep); margin-bottom: 8px; }
+    .tc-title { font-size: 11.5px; font-weight: 600; display: flex; align-items: center; gap: 6px; color: var(--c-val); }
+    .tc-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--c-ok); }
+    .tc-sess { font-size: 10px; color: var(--c-key); background: var(--c-hover); padding: 1px 6px; border-radius: 4px; font-family: monospace; }
+    .tc-row { margin-bottom: 6px; padding: 5px 8px; background: var(--c-hover); border-radius: 6px; }
+    .tc-row:last-child { margin-bottom: 0; }
+    .tc-lbl-row { display: flex; align-items: center; justify-content: space-between; font-size: 11px; margin-bottom: 1px; }
+    .tc-lbl { color: var(--c-val); font-weight: 500; display: flex; align-items: center; gap: 4px; }
+    .tc-val { font-family: monospace; font-weight: bold; color: var(--c-ok); }
+    .tc-time { font-size: 9.5px; color: var(--c-dim); }
+    .tc-foot { border-top: 1px solid var(--c-sep); margin-top: 8px; padding-top: 6px; display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: var(--c-dim); }
     .pulse-dot {
       display: inline-block;
       width: 5px; height: 5px;
@@ -416,6 +443,9 @@
   }
 
   sep(); const cTok = cell('Token', I_TOKEN, '');
+  cTok.g.classList.add('token-cell');
+  cTok.g.addEventListener('mouseenter', showTokenCard);
+  cTok.g.addEventListener('mouseleave', scheduleCloseTokenCard);
   sep(); const cTps = cell('TPS', I_BOLT, '');
   const cTpsDot = el('span', 'pulse-dot');
   cTps.g.insertBefore(cTpsDot, cTps.v);
@@ -662,6 +692,127 @@
     qcNodes.acc.textContent = '账号: ' + (x.account ? shortEmail(x.account) : '—');
   }
 
+  /* ---- Token 用量悬浮卡片 ---- */
+  let tokenCard = null;
+  let tcNodes = null;
+  let tokenCardTimer = null;
+  let lastTokenData = null;
+
+  function formatTokenCount(n) {
+    if (typeof n !== 'number' || !isFinite(n) || n <= 0) return '0';
+    if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+    if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+    return String(Math.round(n));
+  }
+
+  function showTokenCard() {
+    if (tokenCardTimer) { clearTimeout(tokenCardTimer); tokenCardTimer = null; }
+    if (!tokenCard || !tokenCard.isConnected) {
+      tokenCard = el('div', 'token-card');
+      tokenCard.innerHTML = `
+        <div class="tc-head">
+          <div class="tc-title">
+            <span class="tc-dot"></span>
+            <span>Token 用量统计</span>
+          </div>
+          <span class="tc-sess">多会话累计</span>
+        </div>
+        <div class="tc-row">
+          <div class="tc-lbl-row">
+            <span class="tc-lbl">月用量</span>
+            <span class="tc-month-val tc-val">—</span>
+          </div>
+          <div class="tc-time">每月1号0点刷新统计</div>
+        </div>
+        <div class="tc-row">
+          <div class="tc-lbl-row">
+            <span class="tc-lbl">周用量</span>
+            <span class="tc-week-val tc-val">—</span>
+          </div>
+          <div class="tc-time">周一0点刷新统计</div>
+        </div>
+        <div class="tc-row">
+          <div class="tc-lbl-row">
+            <span class="tc-lbl">日用量</span>
+            <span class="tc-day-val tc-val">—</span>
+          </div>
+          <div class="tc-time">每日0点刷新统计</div>
+        </div>
+        <div class="tc-foot">
+          <span>当前会话: <strong class="tc-cur-val" style="color:var(--c-val);font-family:monospace;">—</strong></span>
+          <span>全量 Brain 汇总</span>
+        </div>
+      `;
+      tcNodes = {
+        monthVal: tokenCard.querySelector('.tc-month-val'),
+        weekVal: tokenCard.querySelector('.tc-week-val'),
+        dayVal: tokenCard.querySelector('.tc-day-val'),
+        curVal: tokenCard.querySelector('.tc-cur-val'),
+      };
+      root.appendChild(tokenCard);
+      tokenCard.addEventListener('mouseenter', () => {
+        if (tokenCardTimer) { clearTimeout(tokenCardTimer); tokenCardTimer = null; }
+      });
+      tokenCard.addEventListener('mouseleave', () => {
+        scheduleCloseTokenCard();
+      });
+    }
+    renderTokenCard();
+    placeTokenCard();
+  }
+
+  function scheduleCloseTokenCard() {
+    if (tokenCardTimer) clearTimeout(tokenCardTimer);
+    tokenCardTimer = setTimeout(() => {
+      closeTokenCard();
+    }, 150);
+  }
+
+  function closeTokenCard() {
+    if (tokenCard) {
+      try { tokenCard.remove(); } catch (_) {}
+      tokenCard = null;
+      tcNodes = null;
+    }
+  }
+
+  function placeTokenCard() {
+    if (!tokenCard || !cTok || !cTok.g) return;
+    const r = cTok.g.getBoundingClientRect();
+    tokenCard.style.visibility = 'hidden';
+    tokenCard.style.display = 'block';
+    requestAnimationFrame(() => {
+      if (!tokenCard) return;
+      const cw = tokenCard.offsetWidth || 250;
+      const ch = tokenCard.offsetHeight || 180;
+      let left = r.left + r.width / 2 - cw / 2;
+      let top = r.top - ch - 8;
+      if (top < 8) top = r.bottom + 8;
+      if (left < 8) left = 8;
+      if (left + cw > window.innerWidth - 8) left = window.innerWidth - 8 - cw;
+      tokenCard.style.left = Math.round(left) + 'px';
+      tokenCard.style.top = Math.round(top) + 'px';
+      tokenCard.style.visibility = 'visible';
+    });
+  }
+
+  function renderTokenCard() {
+    if (!tokenCard || !tcNodes || !lastTokenData) return;
+    const u = lastTokenData.tokenUsage || {};
+    tcNodes.monthVal.textContent = formatTokenCount(u.month);
+    tcNodes.weekVal.textContent = formatTokenCount(u.week);
+    tcNodes.dayVal.textContent = formatTokenCount(u.day);
+    tcNodes.curVal.textContent = cTok.v.textContent || '—';
+  }
+
+  /* ---- 数据平滑记忆与切号防抖 ---- */
+  let lastValidH5 = null;
+  let lastValidWk = null;
+  let lastValidTps = null;
+  let lastValidTtft = null;
+  let lastValidTpsAt = 0;
+
   /* ---- 账号项（可点击，弹账号面板）----
    * 免 fetch 通道：accounts 数据由 sidecar 在 payload 下行；点击把
    * pendingSwitch 写到 window.__AGY_MINIBAR.pendingSwitch，由 sidecar 下一轮读走执行。
@@ -713,6 +864,21 @@
         row.addEventListener('click', () => {
           switchingTarget = a.email;
           switchState = 'pending';
+          vAcc.textContent = shortEmail(a.email) + '…';
+          vAcc.style.opacity = '0.75';
+          // 若点击的目标账号有缓存额度，立即平滑预填圆环，杜绝数据跳变
+          if (typeof a.gemini5h === 'number' && typeof a.geminiWeekly === 'number') {
+            lastValidH5 = Math.round(a.gemini5h);
+            lastValidWk = Math.round(a.geminiWeekly);
+            const tH5 = lastValidH5 < 20 ? 'bad' : lastValidH5 < 40 ? 'warn' : '';
+            const tWk = lastValidWk < 20 ? 'bad' : lastValidWk < 40 ? 'warn' : '';
+            setRingProgress(ringH5.fl, lastValidH5, tH5);
+            setRingProgress(ringWk.fl, lastValidWk, tWk);
+            vH5.textContent = pct(lastValidH5);
+            tone(vH5, tH5);
+            vWk.textContent = pct(lastValidWk);
+            tone(vWk, tWk);
+          }
           // 上行指令：sidecar 下一轮 tick 读走并执行
           window.__AGY_MINIBAR.pendingSwitch = a.email;
           renderPanel();
@@ -821,7 +987,7 @@
   }
 
   let raf = 0;
-  const schedule = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; place(); if (quotaCard) placeQuotaCard(); }); };
+  const schedule = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; place(); if (quotaCard) placeQuotaCard(); if (tokenCard) placeTokenCard(); }); };
   window.addEventListener('resize', schedule, { passive: true });
   window.addEventListener('scroll', schedule, { passive: true, capture: true });
 
@@ -830,6 +996,15 @@
     const x = d || {};
     dedupe();
     if (!host.isConnected) mount(); else place();
+
+    // 缓存上游有效数据，用于瞬态平滑锁定
+    if (typeof x.h5 === 'number' && isFinite(x.h5)) lastValidH5 = Math.round(x.h5);
+    if (typeof x.wk === 'number' && isFinite(x.wk)) lastValidWk = Math.round(x.wk);
+    if (typeof x.tps === 'number' && isFinite(x.tps) && x.tps > 0) {
+      lastValidTps = x.tps;
+      lastValidTpsAt = Date.now();
+      if (x.ttft) lastValidTtft = x.ttft;
+    }
 
     const phys = typeof x.ctxPct === 'number' && isFinite(x.ctxPct) ? x.ctxPct : null;
     const comp = typeof x.compactPct === 'number' && isFinite(x.compactPct) ? x.compactPct : null;
@@ -862,9 +1037,18 @@
     cTok.v.textContent = typeof x.tokensM === 'number' && isFinite(x.tokensM) && x.tokensM > 0
       ? (x.tokensM >= 10 ? x.tokensM.toFixed(1) + 'M' : (x.tokensM < 0.01 ? (x.tokensM * 1000).toFixed(0) + 'k' : x.tokensM.toFixed(2) + 'M'))
       : '—';
+    lastTokenData = x;
+    if (tokenCard && tokenCard.isConnected) renderTokenCard();
+
     // TPS 呼吸点动效与状态
     const isGen = Boolean(x.isGenerating);
-    const tpsVal = typeof x.tps === 'number' && isFinite(x.tps) ? x.tps : 0;
+    let tpsVal = typeof x.tps === 'number' && isFinite(x.tps) ? x.tps : 0;
+    const isSwitching = switchState === 'pending' || Boolean(switchingTarget);
+    // 切号或瞬态波动（12秒内）继承上一轮有效 TPS，防止瞬间掉成「—」
+    if (tpsVal <= 0 && (isSwitching || (Date.now() - lastValidTpsAt < 12000)) && lastValidTps > 0) {
+      tpsVal = lastValidTps;
+    }
+
     let speedTier = 'fast';
     if (tpsVal > 0 && tpsVal < 12) speedTier = 'slow';
     else if (tpsVal >= 12 && tpsVal < 30) speedTier = 'medium';
@@ -878,22 +1062,38 @@
     }
 
     // TPS = 纯解码速度（output_tokens / streaming_seconds），与 DSH 下方 tok/s 同口径
-    cTps.v.textContent = typeof x.tps === 'number' && isFinite(x.tps) && x.tps > 0 ? x.tps.toFixed(0) : '—';
+    cTps.v.textContent = tpsVal > 0 ? tpsVal.toFixed(0) : '—';
     const statusText = isGen ? '正在生成... ' : '';
-    if (x.ttft) cTps.g.title = statusText + '纯生成速度 ' + (x.tps > 0 ? x.tps.toFixed(1) : '—') + ' tok/s | 首字响应 ' + x.ttft.toFixed(2) + 's' + (x.model ? ' (' + x.model + ')' : '');
-    else if (x.model) cTps.g.title = statusText + '模型: ' + x.model + (x.tps > 0 ? ' (' + x.tps.toFixed(1) + ' tok/s)' : '');
+    const effTtft = x.ttft || lastValidTtft;
+    if (effTtft) cTps.g.title = statusText + '纯生成速度 ' + (tpsVal > 0 ? tpsVal.toFixed(1) : '—') + ' tok/s | 首字响应 ' + effTtft.toFixed(2) + 's' + (x.model ? ' (' + x.model + ')' : '');
+    else if (x.model) cTps.g.title = statusText + '模型: ' + x.model + (tpsVal > 0 ? ' (' + tpsVal.toFixed(1) + ' tok/s)' : '');
+
     // 账号项：显示 payload 下行的账号与账号列表快照
     ensureAccountCell();
-    if (x.account) vAcc.textContent = shortEmail(x.account);
-    else vAcc.textContent = '—';
+    if (switchState === 'pending' && switchingTarget) {
+      vAcc.textContent = shortEmail(switchingTarget) + '…';
+      vAcc.style.opacity = '0.75';
+    } else if (x.account) {
+      vAcc.textContent = shortEmail(x.account);
+      vAcc.style.opacity = '1';
+    } else {
+      vAcc.textContent = '—';
+      vAcc.style.opacity = '1';
+    }
     accData = Array.isArray(x.accounts) ? x.accounts : null;
     if (x.switchResult) {
       // sidecar 回填的切换结果
       switchState = x.switchResult.ok ? 'ok' : 'fail:' + (x.switchResult.error || '');
-      if (x.switchResult.ok) vAcc.textContent = shortEmail(x.switchResult.email);
-      switchingTarget = x.switchResult.email || switchingTarget;
+      if (x.switchResult.ok) {
+        vAcc.textContent = shortEmail(x.switchResult.email);
+        vAcc.style.opacity = '1';
+        switchingTarget = '';
+        if (window.__AGY_MINIBAR) window.__AGY_MINIBAR.pendingSwitch = null;
+      } else {
+        vAcc.style.opacity = '1';
+      }
       // 3 秒后清除结果态
-      setTimeout(() => { switchState = ''; if (panel) renderPanel(); }, 3000);
+      setTimeout(() => { switchState = ''; switchingTarget = ''; if (panel) renderPanel(); }, 3000);
     }
     if (x.captureResult) {
       // sidecar 回填的抓取结果（登录确认条场景）
@@ -914,8 +1114,12 @@
     if (quotaCard) renderQuotaCard();
 
     // 整合额度展示：Scheme B (5h+加粗环+数值 · 周+加粗环+数值，统一翡翠绿与阈值变色)
-    const h5Val = typeof x.h5 === 'number' && isFinite(x.h5) ? Math.round(x.h5) : null;
-    const wkVal = typeof x.wk === 'number' && isFinite(x.wk) ? Math.round(x.wk) : null;
+    let h5Val = typeof x.h5 === 'number' && isFinite(x.h5) ? Math.round(x.h5) : null;
+    let wkVal = typeof x.wk === 'number' && isFinite(x.wk) ? Math.round(x.wk) : null;
+    // 切号或 LS 重启瞬态为 null 时无缝继承上一轮有效额度，杜绝圆环归零/闪烁
+    if (h5Val === null && lastValidH5 !== null) h5Val = lastValidH5;
+    if (wkVal === null && lastValidWk !== null) wkVal = lastValidWk;
+
     const tH5 = h5Val === null ? '' : h5Val < 20 ? 'bad' : h5Val < 40 ? 'warn' : '';
     const tWk = wkVal === null ? '' : wkVal < 20 ? 'bad' : wkVal < 40 ? 'warn' : '';
 
@@ -952,7 +1156,7 @@
     ver: VER, update, mount,
     pendingSwitch: null,     // 页面 → sidecar：切换指令
     pendingCapture: false,   // 页面 → sidecar：抓取当前凭据入库
-    unmount() { closeQuotaCard(); try { host.remove(); } catch (_) {} },
+    unmount() { closeQuotaCard(); closeTokenCard(); try { host.remove(); } catch (_) {} },
     /* OAuth 登录确认条：登录完成后显示，点击抓取 token 入库（免 fetch 通道） */
     showLoginConfirm() {
       try {
