@@ -5,7 +5,7 @@
 //  2. 全局只允许一个 #agy-minibar-host；
 //  3. 只改文本与 SVG 属性，不做结构性增删。
 (() => {
-  const VER = 32;
+  const VER = 34;
   const HOST_ID = 'agy-minibar-host';
   if (window.__AGY_MINIBAR && window.__AGY_MINIBAR.ver === VER) return;
 
@@ -102,12 +102,53 @@
     .qc-pool { font-size: 10px; color: var(--c-key); background: var(--c-hover); padding: 1px 6px; border-radius: 4px; font-family: monospace; }
     .qc-row { margin-bottom: 8px; }
     .qc-row:last-child { margin-bottom: 0; }
-    .qc-lbl-row { display: flex; align-items: center; justify-content: space-between; font-size: 11px; margin-bottom: 3px; }
-    .qc-lbl { display: flex; align-items: center; gap: 5px; color: var(--c-dim); }
+    .qc-lbl-row { display: flex; align-items: center; justify-content: space-between; font-size: 11px; margin-bottom: 2px; }
+    .qc-lbl { color: var(--c-val); font-weight: 500; }
+    .qc-val-wrap { display: flex; align-items: baseline; }
     .qc-val { font-family: monospace; font-weight: bold; }
-    .qc-bar-bg { width: 100%; height: 5px; background: var(--c-hover); border-radius: 3px; overflow: hidden; }
-    .qc-bar-fill { height: 100%; border-radius: 3px; transition: width .3s ease; }
-    .qc-time { font-size: 10px; color: var(--c-key); display: flex; justify-content: space-between; margin-top: 3px; }
+    .qc-track-wrap {
+      position: relative;
+      width: 100%;
+      height: 14px;
+      display: flex;
+      align-items: center;
+      margin: 1px 0 3px;
+    }
+    .qc-track-groove {
+      width: 100%;
+      height: 4px;
+      background: var(--c-hover);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .qc-track-fill {
+      height: 100%;
+      border-radius: 2px;
+      transition: width .25s ease;
+    }
+    .qc-ptr-top {
+      position: absolute;
+      top: 0px;
+      width: 0;
+      height: 0;
+      border-left: 3.5px solid transparent;
+      border-right: 3.5px solid transparent;
+      border-top: 5px solid #38bdf8;
+      filter: drop-shadow(0 0 2px #38bdf8);
+      transition: left .25s ease;
+    }
+    .qc-ptr-btm {
+      position: absolute;
+      bottom: 0px;
+      width: 0;
+      height: 0;
+      border-left: 3.5px solid transparent;
+      border-right: 3.5px solid transparent;
+      border-bottom: 5px solid #34d399;
+      filter: drop-shadow(0 0 2px #34d399);
+      transition: left .25s ease;
+    }
+    .qc-time { font-size: 10px; color: var(--c-key); display: flex; justify-content: space-between; margin-top: 1px; }
     .qc-foot { border-top: 1px solid var(--c-sep); margin-top: 8px; padding-top: 6px; display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: var(--c-dim); }
     .pulse-dot {
       display: inline-block;
@@ -368,6 +409,20 @@
   cQuota.g.classList.add('quota-cell');
   cQuota.g.addEventListener('mouseenter', showQuotaCard);
   cQuota.g.addEventListener('mouseleave', scheduleCloseQuotaCard);
+
+  // 永久保留的单条双游标 DOM 结构（直接修改属性，禁止在 tick 中重建，彻底杜绝重绘闪烁）
+  const qBarWrap = el('div', 'q-bar-wrap');
+  const qTrack = el('div', 'q-track');
+  const qFill = el('div', 'q-fill');
+  qTrack.appendChild(qFill);
+  const qPtrH5 = el('div', 'q-ptr-h5');
+  const qPtrWk = el('div', 'q-ptr-wk');
+  qBarWrap.appendChild(qTrack);
+  qBarWrap.appendChild(qPtrH5);
+  qBarWrap.appendChild(qPtrWk);
+  cQuota.v.textContent = '';
+  cQuota.v.appendChild(qBarWrap);
+
   const cErr = el('span', 'err-badge');
   bar.appendChild(cErr);
 
@@ -383,13 +438,73 @@
   }
 
   let quotaCard = null;
+  let qcNodes = null;
   let cardTimer = null;
   let lastQuotaData = null;
+  let lastH5Reset = '';
+  let lastWkReset = '';
 
   function showQuotaCard() {
     if (cardTimer) { clearTimeout(cardTimer); cardTimer = null; }
-    if (!quotaCard) {
+    if (!quotaCard || !quotaCard.isConnected) {
       quotaCard = el('div', 'quota-card');
+      quotaCard.innerHTML = `
+        <div class="qc-head">
+          <div class="qc-title">
+            <span class="qc-dot"></span>
+            <span>配额使用明细</span>
+          </div>
+          <span class="qc-pool"></span>
+        </div>
+        <div class="qc-row">
+          <div class="qc-lbl-row">
+            <span class="qc-lbl">5 小时额度</span>
+            <div class="qc-val-wrap">
+              <span class="qc-h5-val qc-val"></span>
+              <span class="qc-h5-used" style="font-size:9.5px;color:var(--c-dim);margin-left:4px;"></span>
+            </div>
+          </div>
+          <div class="qc-track-wrap">
+            <div class="qc-track-groove"><div class="qc-h5-fill qc-track-fill"></div></div>
+            <div class="qc-h5-ptr qc-ptr-top"></div>
+          </div>
+          <div class="qc-time"><span>重置周期</span><span class="qc-h5-time"></span></div>
+        </div>
+        <div class="qc-row">
+          <div class="qc-lbl-row">
+            <span class="qc-lbl">每周额度</span>
+            <div class="qc-val-wrap">
+              <span class="qc-wk-val qc-val"></span>
+              <span class="qc-wk-used" style="font-size:9.5px;color:var(--c-dim);margin-left:4px;"></span>
+            </div>
+          </div>
+          <div class="qc-track-wrap">
+            <div class="qc-track-groove"><div class="qc-wk-fill qc-track-fill"></div></div>
+            <div class="qc-wk-ptr qc-ptr-btm"></div>
+          </div>
+          <div class="qc-time"><span>重置周期</span><span class="qc-wk-time"></span></div>
+        </div>
+        <div class="qc-foot">
+          <span>状态: <strong class="qc-status"></strong></span>
+          <span class="qc-acc"></span>
+        </div>
+      `;
+      qcNodes = {
+        dot: quotaCard.querySelector('.qc-dot'),
+        pool: quotaCard.querySelector('.qc-pool'),
+        h5Val: quotaCard.querySelector('.qc-h5-val'),
+        h5Used: quotaCard.querySelector('.qc-h5-used'),
+        h5Fill: quotaCard.querySelector('.qc-h5-fill'),
+        h5Ptr: quotaCard.querySelector('.qc-h5-ptr'),
+        h5Time: quotaCard.querySelector('.qc-h5-time'),
+        wkVal: quotaCard.querySelector('.qc-wk-val'),
+        wkUsed: quotaCard.querySelector('.qc-wk-used'),
+        wkFill: quotaCard.querySelector('.qc-wk-fill'),
+        wkPtr: quotaCard.querySelector('.qc-wk-ptr'),
+        wkTime: quotaCard.querySelector('.qc-wk-time'),
+        status: quotaCard.querySelector('.qc-status'),
+        acc: quotaCard.querySelector('.qc-acc'),
+      };
       root.appendChild(quotaCard);
       quotaCard.addEventListener('mouseenter', () => {
         if (cardTimer) { clearTimeout(cardTimer); cardTimer = null; }
@@ -413,6 +528,7 @@
     if (quotaCard) {
       try { quotaCard.remove(); } catch (_) {}
       quotaCard = null;
+      qcNodes = null;
     }
   }
 
@@ -437,58 +553,76 @@
   }
 
   function renderQuotaCard() {
-    if (!quotaCard || !lastQuotaData) return;
+    if (!quotaCard || !qcNodes || !lastQuotaData) return;
     const x = lastQuotaData;
     const h5Val = typeof x.h5 === 'number' && isFinite(x.h5) ? Math.round(x.h5) : null;
     const wkVal = typeof x.wk === 'number' && isFinite(x.wk) ? Math.round(x.wk) : null;
     const colH5 = getQuotaColor(h5Val, COLOR_H5_DEF);
     const colWk = getQuotaColor(wkVal, COLOR_WK_DEF);
 
-    const poolName = x.model ? (x.model.length > 18 ? x.model.slice(0, 16) + '…' : x.model) : '当前配额池';
+    qcNodes.dot.style.background = colH5;
+    qcNodes.pool.textContent = x.model ? (x.model.length > 18 ? x.model.slice(0, 16) + '…' : x.model) : '当前配额池';
+
+    // 5h 游标：精准骑在对应刻度百分比处，杜绝 0 像素假游标
+    if (h5Val !== null) {
+      qcNodes.h5Val.textContent = h5Val + '% 剩余';
+      qcNodes.h5Val.style.color = colH5;
+      qcNodes.h5Used.textContent = `(已用 ${100 - h5Val}%)`;
+      qcNodes.h5Fill.style.width = h5Val + '%';
+      qcNodes.h5Fill.style.backgroundColor = colH5;
+      qcNodes.h5Ptr.style.display = 'block';
+      qcNodes.h5Ptr.style.left = `calc(${h5Val}% - 3.5px)`;
+      qcNodes.h5Ptr.style.borderTopColor = colH5;
+      qcNodes.h5Ptr.style.filter = `drop-shadow(0 0 2px ${colH5})`;
+    } else {
+      qcNodes.h5Val.textContent = '无限制';
+      qcNodes.h5Val.style.color = colH5;
+      qcNodes.h5Used.textContent = '';
+      qcNodes.h5Fill.style.width = '100%';
+      qcNodes.h5Fill.style.backgroundColor = colH5;
+      qcNodes.h5Ptr.style.display = 'none';
+    }
+
+    // Weekly 游标：精准骑在对应刻度百分比处
+    if (wkVal !== null) {
+      qcNodes.wkVal.textContent = wkVal + '% 剩余';
+      qcNodes.wkVal.style.color = colWk;
+      qcNodes.wkUsed.textContent = `(已用 ${100 - wkVal}%)`;
+      qcNodes.wkFill.style.width = wkVal + '%';
+      qcNodes.wkFill.style.backgroundColor = colWk;
+      qcNodes.wkPtr.style.display = 'block';
+      qcNodes.wkPtr.style.left = `calc(${wkVal}% - 3.5px)`;
+      qcNodes.wkPtr.style.borderBottomColor = colWk;
+      qcNodes.wkPtr.style.filter = `drop-shadow(0 0 2px ${colWk})`;
+    } else {
+      qcNodes.wkVal.textContent = '无限制';
+      qcNodes.wkVal.style.color = colWk;
+      qcNodes.wkUsed.textContent = '';
+      qcNodes.wkFill.style.width = '100%';
+      qcNodes.wkFill.style.backgroundColor = colWk;
+      qcNodes.wkPtr.style.display = 'none';
+    }
+
+    // 缓存最新非空倒计时，防止交替 tick 时闪现「暂无」
+    if (x.h5Reset) lastH5Reset = x.h5Reset;
+    if (x.wkReset) lastWkReset = x.wkReset;
+    qcNodes.h5Time.textContent = lastH5Reset ? `约 ${lastH5Reset} 后充值` : '充值倒计时暂无';
+    qcNodes.wkTime.textContent = lastWkReset ? `约 ${lastWkReset} 后重置` : '重置倒计时暂无';
 
     let minVal = 100;
     if (h5Val !== null) minVal = Math.min(minVal, h5Val);
     if (wkVal !== null) minVal = Math.min(minVal, wkVal);
-    const statusText = minVal < 20 ? '<span style="color:#ef4444;font-weight:600;">额度紧张</span>'
-      : (minVal < 40 ? '<span style="color:#f59e0b;font-weight:600;">注意消耗</span>'
-      : '<span style="color:#34d399;font-weight:600;">充裕可用</span>');
-
-    const h5ResetStr = x.h5Reset ? `约 ${x.h5Reset} 后充值` : '充值倒计时暂无';
-    const wkResetStr = x.wkReset ? `约 ${x.wkReset} 后重置` : '重置倒计时暂无';
-
-    quotaCard.innerHTML = `
-      <div class="qc-head">
-        <div class="qc-title">
-          <span class="qc-dot" style="background:${colH5};"></span>
-          <span>配额使用明细</span>
-        </div>
-        <span class="qc-pool">${poolName}</span>
-      </div>
-      <div class="qc-row">
-        <div class="qc-lbl-row">
-          <span class="qc-lbl"><span style="color:${colH5}">▼</span> 5 小时额度</span>
-          <span class="qc-val" style="color:${colH5}">${h5Val !== null ? h5Val + '%' : '无限制'}</span>
-        </div>
-        <div class="qc-bar-bg">
-          <div class="qc-bar-fill" style="width:${h5Val !== null ? h5Val : 100}%;background:${colH5};"></div>
-        </div>
-        <div class="qc-time"><span>重置周期</span><span>${h5ResetStr}</span></div>
-      </div>
-      <div class="qc-row">
-        <div class="qc-lbl-row">
-          <span class="qc-lbl"><span style="color:${colWk}">▲</span> 每周额度</span>
-          <span class="qc-val" style="color:${colWk}">${wkVal !== null ? wkVal + '%' : '无限制'}</span>
-        </div>
-        <div class="qc-bar-bg">
-          <div class="qc-bar-fill" style="width:${wkVal !== null ? wkVal : 100}%;background:${colWk};"></div>
-        </div>
-        <div class="qc-time"><span>重置周期</span><span>${wkResetStr}</span></div>
-      </div>
-      <div class="qc-foot">
-        <span>状态: ${statusText}</span>
-        <span>账号: ${x.account ? shortEmail(x.account) : '—'}</span>
-      </div>
-    `;
+    if (minVal < 20) {
+      qcNodes.status.textContent = '额度紧张';
+      qcNodes.status.style.color = '#ef4444';
+    } else if (minVal < 40) {
+      qcNodes.status.textContent = '注意消耗';
+      qcNodes.status.style.color = '#f59e0b';
+    } else {
+      qcNodes.status.textContent = '充裕可用';
+      qcNodes.status.style.color = '#34d399';
+    }
+    qcNodes.acc.textContent = '账号: ' + (x.account ? shortEmail(x.account) : '—');
   }
 
   /* ---- 账号项（可点击，弹账号面板）----
@@ -765,30 +899,36 @@
     lastQuotaData = x;
     if (quotaCard) renderQuotaCard();
 
-    // 整合额度展示：单槽对向双游标（5h ▼天蓝 / 周 ▲翡翠绿）
+    // 整合额度展示：直接更新永久 DOM 属性，绝不重建 DOM，零闪烁
     const h5Val = typeof x.h5 === 'number' && isFinite(x.h5) ? Math.round(x.h5) : null;
     const wkVal = typeof x.wk === 'number' && isFinite(x.wk) ? Math.round(x.wk) : null;
     const colH5 = getQuotaColor(h5Val, COLOR_H5_DEF);
     const colWk = getQuotaColor(wkVal, COLOR_WK_DEF);
 
     if (h5Val === null && wkVal === null) {
-      cQuota.v.innerHTML = '—';
+      qBarWrap.style.display = 'none';
     } else {
+      qBarWrap.style.display = 'inline-flex';
       const minVal = Math.min(h5Val !== null ? h5Val : 100, wkVal !== null ? wkVal : 100);
-      const h5Left = h5Val !== null ? `calc(${h5Val}% - 3px)` : '0%';
-      const wkLeft = wkVal !== null ? `calc(${wkVal}% - 3px)` : '0%';
-      const h5Display = h5Val !== null ? '' : 'display:none;';
-      const wkDisplay = wkVal !== null ? '' : 'display:none;';
+      qFill.style.width = minVal + '%';
 
-      cQuota.v.innerHTML = `
-        <div class="q-bar-wrap">
-          <div class="q-track">
-            <div class="q-fill" style="width:${minVal}%;"></div>
-          </div>
-          <div class="q-ptr-h5" style="left:${h5Left};border-top-color:${colH5};filter:drop-shadow(0 0 2px ${colH5});${h5Display}"></div>
-          <div class="q-ptr-wk" style="left:${wkLeft};border-bottom-color:${colWk};filter:drop-shadow(0 0 2px ${colWk});${wkDisplay}"></div>
-        </div>
-      `;
+      if (h5Val !== null) {
+        qPtrH5.style.display = 'block';
+        qPtrH5.style.left = `calc(${h5Val}% - 3px)`;
+        qPtrH5.style.borderTopColor = colH5;
+        qPtrH5.style.filter = `drop-shadow(0 0 2px ${colH5})`;
+      } else {
+        qPtrH5.style.display = 'none';
+      }
+
+      if (wkVal !== null) {
+        qPtrWk.style.display = 'block';
+        qPtrWk.style.left = `calc(${wkVal}% - 3px)`;
+        qPtrWk.style.borderBottomColor = colWk;
+        qPtrWk.style.filter = `drop-shadow(0 0 2px ${colWk})`;
+      } else {
+        qPtrWk.style.display = 'none';
+      }
     }
     cQuota.g.removeAttribute('title');
 
