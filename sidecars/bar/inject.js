@@ -5,7 +5,7 @@
 //  2. 全局只允许一个 #agy-minibar-host；
 //  3. 只改文本与 SVG 属性，不做结构性增删。
 (() => {
-  const VER = 34;
+  const VER = 36;
   const HOST_ID = 'agy-minibar-host';
   if (window.__AGY_MINIBAR && window.__AGY_MINIBAR.ver === VER) return;
 
@@ -398,11 +398,10 @@
   }
 
   sep(); const cTok = cell('Token', I_TOKEN, '');
-  sep(); const cTurns = cell('轮数', I_LOOP, '');
   sep(); const cTps = cell('TPS', I_BOLT, '');
   const cTpsDot = el('span', 'pulse-dot');
   cTps.g.insertBefore(cTpsDot, cTps.v);
-  // Token → 轮数 → TPS 之后插入上下文圆环，再接其余三项
+  // Token → TPS 之后插入上下文圆环，再接其余三项
   sep(); bar.appendChild(gCtx);
   sep(); const cCache = cell('缓存命中', I_CACHE, 'ok');
   sep(); const cQuota = cell('额度', I_QUOTA, '');
@@ -867,7 +866,6 @@
     const statusText = isGen ? '正在生成... ' : '';
     if (x.ttft) cTps.g.title = statusText + '纯生成速度 ' + (x.tps > 0 ? x.tps.toFixed(1) : '—') + ' tok/s | 首字响应 ' + x.ttft.toFixed(2) + 's' + (x.model ? ' (' + x.model + ')' : '');
     else if (x.model) cTps.g.title = statusText + '模型: ' + x.model + (x.tps > 0 ? ' (' + x.tps.toFixed(1) + ' tok/s)' : '');
-    cTurns.v.textContent = typeof x.turns === 'number' && isFinite(x.turns) && x.turns > 0 ? String(Math.round(x.turns)) : '—';
     // 账号项：显示 payload 下行的账号与账号列表快照
     ensureAccountCell();
     if (x.account) vAcc.textContent = shortEmail(x.account);
