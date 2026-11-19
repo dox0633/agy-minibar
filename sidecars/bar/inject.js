@@ -5,9 +5,16 @@
 //  2. 全局只允许一个 #agy-minibar-host；
 //  3. 只改文本与 SVG 属性，不做结构性增删。
 (() => {
-  const VER = 50;
+  const VER = 54;
   const HOST_ID = 'agy-minibar-host';
   if (window.__AGY_MINIBAR && window.__AGY_MINIBAR.ver === VER) return;
+  try {
+    if (window.__AGY_MINIBAR && typeof window.__AGY_MINIBAR.unmount === 'function') {
+      window.__AGY_MINIBAR.unmount();
+    }
+    const oldHosts = document.querySelectorAll('#' + HOST_ID);
+    for (const oh of oldHosts) oh.remove();
+  } catch (_) {}
 
   const CSS = `
     :host { all: initial; }
@@ -15,28 +22,30 @@
       position: fixed;
       display: flex; align-items: center; justify-content: center;
       height: 19px; padding: 0 1px;
-      font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
-      font-size: 12.5px; line-height: 1;
+      font-family: "Bahnschrift", system-ui, -apple-system, sans-serif;
+      font-size: 12px; line-height: 1;
       color: var(--c-dim);
       white-space: nowrap; overflow: hidden;
       pointer-events: none;
       z-index: 2147483000;
     }
-    .i { display: inline-flex; align-items: center; gap: 4px; padding: 0 9px; flex: 0 0 auto; }
+    .i { display: inline-flex; align-items: center; gap: 4px; padding: 0 9px; flex: 0 0 auto; height: 19px; }
     .i:first-child { padding-left: 0; }
     .n {
       color: var(--c-key);
-      font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
-      font-size: 11.5px;
-      font-weight: 550;
-      letter-spacing: 0.5px;
+      font-family: "Bahnschrift", system-ui, -apple-system, sans-serif;
+      font-size: 12px;
+      font-weight: 500;
+      letter-spacing: 0.6px;
+      line-height: 1;
     }
     .v {
       color: var(--c-val);
-      font-family: "JetBrains Mono", "Cascadia Code", Consolas, "Courier New", monospace;
+      font-family: "Bahnschrift", system-ui, -apple-system, sans-serif;
       font-size: 12px;
       font-weight: 600;
-      letter-spacing: 0.2px;
+      letter-spacing: 0.3px;
+      line-height: 1;
       font-variant-numeric: tabular-nums;
     }
     .v.ok { color: var(--c-ok); }
@@ -44,7 +53,7 @@
     .v.bad { color: var(--c-bad); }
     .q-slash { opacity: .35; font-weight: normal; margin: 0 1px; }
     .quota-cell { cursor: pointer; pointer-events: auto; }
-    .q-dot { color: var(--c-sep); opacity: .7; font-size: 11px; margin: 0 1px; user-select: none; }
+    .q-dot { color: var(--c-sep); opacity: .7; font-size: 11px; margin: 0 1px; user-select: none; align-self: center; transform: translateY(-0.5px); }
     .q-bar-wrap {
       position: relative;
       width: 52px;
@@ -229,8 +238,8 @@
       50% { transform: scale(1.35); opacity: 1; filter: drop-shadow(0 0 3px currentColor); }
       100% { transform: scale(0.85); opacity: 0.5; }
     }
-    .ic { width: 13px; height: 13px; flex: 0 0 13px; display: block; opacity: .85; }
-    .sep { width: 1px; height: 10px; background: var(--c-sep); flex: 0 0 1px; opacity: .5; }
+    .ic { width: 13px; height: 13px; flex: 0 0 13px; display: block; opacity: .85; align-self: center; transform: translateY(-0.8px); }
+    .sep { width: 1px; height: 10px; background: var(--c-sep); flex: 0 0 1px; opacity: .5; align-self: center; }
     .acc { cursor: pointer; pointer-events: auto; }
     .acc:hover .v { text-decoration: underline; }
     .panel {
@@ -298,7 +307,7 @@
     }
     .lc-btn:hover { background: var(--c-hover); }
     .lc-x { color: var(--c-key); cursor: pointer; padding: 0 4px; }
-    .ring { width: 18px; height: 18px; flex: 0 0 18px; display: inline-block; vertical-align: middle; }
+    .ring { width: 16px; height: 16px; flex: 0 0 16px; display: inline-block; align-self: center; transform: translateY(-0.5px); }
     .ring .tr { stroke: var(--c-sep); opacity: .55; }
     .ring .fl { stroke-linecap: round; transition: stroke-dashoffset .35s ease, stroke .3s ease; }
   `;
