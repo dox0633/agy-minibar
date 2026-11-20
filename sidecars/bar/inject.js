@@ -5,7 +5,7 @@
 //  2. 全局只允许一个 #agy-minibar-host；
 //  3. 只改文本与 SVG 属性，不做结构性增删。
 (() => {
-  const VER = 54;
+  const VER = 55;
   const HOST_ID = 'agy-minibar-host';
   if (window.__AGY_MINIBAR && window.__AGY_MINIBAR.ver === VER) return;
   try {
@@ -1092,11 +1092,13 @@
 
     // 账号项：显示 payload 下行的账号与账号列表快照
     ensureAccountCell();
+    const curAcc = (Array.isArray(x.accounts) ? x.accounts : []).find(a => a.isCurrent);
+    const activeAcc = x.account || (curAcc ? curAcc.email : '');
     if (switchState === 'pending' && switchingTarget) {
       vAcc.textContent = shortEmail(switchingTarget) + '…';
       vAcc.style.opacity = '0.75';
-    } else if (x.account) {
-      vAcc.textContent = shortEmail(x.account);
+    } else if (activeAcc) {
+      vAcc.textContent = shortEmail(activeAcc);
       vAcc.style.opacity = '1';
     } else {
       vAcc.textContent = '—';

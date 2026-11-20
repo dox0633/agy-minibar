@@ -92,6 +92,17 @@ if (!acquireSingletonLock()) {
 }
 setInterval(() => {
   try { writeFileSync(LOCK_FILE, JSON.stringify({ pid: process.pid, at: Date.now() })); } catch {}
+  // 父进程存活看门狗：父进程若已终止，主动退出杜绝孤儿进程堆积
+  try {
+    if (process.ppid) {
+      process.kill(process.ppid, 0);
+    }
+  } catch (e) {
+    if (e.code === 'ESRCH') {
+      try { unlinkSync(LOCK_FILE); } catch {}
+      process.exit(0);
+    }
+  }
 }, 10_000);
 
 let SRC = readFileSync(INJECT_PATH, 'utf-8');
@@ -736,6 +747,10 @@ async function tick() {
       errorNotice = { badge: '周额度耗尽', detail: '当前模型每周额度已耗尽 (0%)' };
     }
 
+    if (!SW.activeEmail && !SW.switching) {
+      initAccount();
+    }
+
     const payload = {
       convId: S.convId,
       model: st.model || '',
@@ -858,19 +873,64 @@ async function loop() { for (;;) { await tick(); await new Promise(r => setTimeo
 
 const SW = { activeEmail: '', switching: false, panelApi: 0, lastError: '', pendingLive: false, deferredLsRestart: false };
 
-/** 初始化：读当前凭据邮箱，并把当前账号备份进库 */
+/** 初始化与自愈：多级容错读取当前账号（解析 blob、PowerShell 直接读取、google_accounts.json 及本地库多重兜底） */
 function initAccount() {
+  if (SW.switching) return;
   try {
-    const blob = readActiveBlob();
-    if (blob) {
-      const o = JSON.parse(blob);
-      SW.activeEmail = o.id_token_email || readActiveEmail() || '';
-      if (SW.activeEmail && o.token) {
-        upsertAccount({ email: SW.activeEmail, token: o.token, auth_method: o.auth_method, writer_id: o.writer_id });
-        log('ACCOUNT_BACKED_UP', SW.activeEmail);
+    // 1. 优先尝试解析 active blob 获得完整凭据
+    try {
+      const blob = readActiveBlob();
+      if (blob && typeof blob === 'string') {
+        const trimmed = blob.trim();
+        const jsonStart = trimmed.indexOf('{');
+        const jsonEnd = trimmed.lastIndexOf('}');
+        if (jsonStart !== -1 && jsonEnd !== -1 && jsonEnd > jsonStart) {
+          const o = JSON.parse(trimmed.slice(jsonStart, jsonEnd + 1));
+          if (o && o.id_token_email) {
+            SW.activeEmail = o.id_token_email;
+            if (o.token) {
+              upsertAccount({ email: o.id_token_email, token: o.token, auth_method: o.auth_method, writer_id: o.writer_id });
+              log('ACCOUNT_BACKED_UP', SW.activeEmail);
+            }
+            return;
+          }
+        }
       }
-    }
-  } catch (e) { log('ACCOUNT_INIT_FAIL', e.message); }
+    } catch (_) {}
+
+    // 2. 降级：直接通过 PowerShell 读 email 模式
+    try {
+      const em = readActiveEmail();
+      if (em && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em.trim())) {
+        SW.activeEmail = em.trim();
+        log('ACCOUNT_RECOVERED_PS', SW.activeEmail);
+        return;
+      }
+    } catch (_) {}
+
+    // 3. 降级：读 .gemini/google_accounts.json 中的 active 字段
+    try {
+      const gaPath = join(homedir(), '.gemini', 'google_accounts.json');
+      const ga = JSON.parse(readFileSync(gaPath, 'utf-8'));
+      if (ga && ga.active && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ga.active.trim())) {
+        SW.activeEmail = ga.active.trim();
+        log('ACCOUNT_RECOVERED_GA', SW.activeEmail);
+        return;
+      }
+    } catch (_) {}
+
+    // 4. 降级：读本地凭据库中的第一个可用账号
+    try {
+      const lib = loadLibrary();
+      if (lib && Array.isArray(lib.accounts) && lib.accounts.length > 0) {
+        SW.activeEmail = lib.accounts[0].email;
+        log('ACCOUNT_RECOVERED_LIB', SW.activeEmail);
+        return;
+      }
+    } catch (_) {}
+  } catch (e) {
+    log('ACCOUNT_INIT_FAIL', e.message);
+  }
 }
 
 /** 热切换核心：写凭据 blob → 让宿主重新读账号 */
