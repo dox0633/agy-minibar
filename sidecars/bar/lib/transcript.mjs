@@ -150,10 +150,11 @@ export function parseTranscriptText(text) {
       entry?.cache_read_tokens !== undefined ||
       entry?.output_tokens !== undefined;
 
-    const isModelStep = entry?.type === 'PLANNER_RESPONSE' || entry?.source === 'MODEL';
+    // 关键修正：仅包含 Token 统计字段，或者为真正的模型响应（PLANNER_RESPONSE）时，才计入模型生成步。
+    // 严禁将工具调用返回/命令输出（source: 'MODEL', type: 'GENERIC'）纳入模型步，否则 0 Token 结果会冲垮 contextUsed 与 cacheHitRate！
+    const isPlannerResponse = entry?.type === 'PLANNER_RESPONSE';
 
-    // 允许缺少 token 字段但属于模型响应的步骤进入序列，以便与 generatorMetadata stepIndices 对齐
-    if (!hasTokenFields && !isModelStep) continue;
+    if (!hasTokenFields && !isPlannerResponse) continue;
 
     const inputTokens = toNonNegInt(entry.input_tokens);
     const cacheReadTokens = toNonNegInt(entry.cache_read_tokens);
@@ -294,6 +295,10 @@ export function buildSpeedIndex(generatorMetadata) {
     const outputTokens = toNonNegInt(cm.usage?.outputTokens);
     const thinkingTokens = toNonNegInt(cm.usage?.thinkingOutputTokens);
     const responseOutputTokens = toNonNegInt(cm.usage?.responseOutputTokens);
+    const inputTokens = toNonNegInt(cm.usage?.inputTokens);
+    const cacheReadTokens = toNonNegInt(cm.usage?.cacheReadTokens);
+    const contextUsed = inputTokens + cacheReadTokens;
+    const cacheHitRate = contextUsed > 0 ? cacheReadTokens / contextUsed : 0;
 
     if (outputTokens <= 0) continue;
 
@@ -331,6 +336,10 @@ export function buildSpeedIndex(generatorMetadata) {
       outputTokens,
       thinkingTokens,
       responseOutputTokens,
+      inputTokens,
+      cacheReadTokens,
+      contextUsed,
+      cacheHitRate,
       streamingTps: sustainedStreamingTps,
       rawStreamingTps: rawStreamingTps !== null ? Number(rawStreamingTps.toFixed(1)) : null,
       durationTps: totalTps,
@@ -382,6 +391,14 @@ export function enrichSummaryWithSpeed(summary, speedIndex) {
         if (!sp && sorted.length > 0) sp = sorted[0][1];
       }
     }
+    // 兜底补齐：若 transcript 缺少 token 字段导致 contextUsed 为 0，而 LS 元数据中有真实使用量，自动补齐
+    if (latest.contextUsed === 0 && sp && sp.contextUsed > 0) {
+      latest.contextUsed = sp.contextUsed;
+      latest.inputTokens = sp.inputTokens;
+      latest.cacheReadTokens = sp.cacheReadTokens;
+      latest.cacheHitRate = sp.cacheHitRate;
+      latest.projectedNextMin = latest.contextUsed + (latest.outputTokens || sp.outputTokens);
+    }
     latest = sp ? { ...latest, speed: sp } : latest;
   } else if (speedIndex.size > 0) {
     // summary.latest 原本为 null（例如 transcript 缺少 token 字段）时的兜底合成
@@ -390,11 +407,11 @@ export function enrichSummaryWithSpeed(summary, speedIndex) {
       if (sp && (sp.outputTokens > 0 || sp.tps !== null)) {
         latest = {
           stepIndex: stepNum,
-          contextUsed: 0,
-          inputTokens: 0,
+          contextUsed: sp.contextUsed || 0,
+          inputTokens: sp.inputTokens || 0,
           outputTokens: sp.outputTokens,
-          cacheReadTokens: 0,
-          cacheHitRate: 0,
+          cacheReadTokens: sp.cacheReadTokens || 0,
+          cacheHitRate: sp.cacheHitRate || 0,
           speed: sp,
         };
         break;

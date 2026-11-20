@@ -536,9 +536,15 @@ async function stats(convId) {
     o.contextUsed = used;
     o.modelLimit = modelWindow(model);
     // 圆环百分比按官方模型窗口算；颜色风险按 256K 自动压缩线算
-    o.ctxPct = Math.min(100, used / modelWindow(model) * 100);
-    o.compactPct = Math.min(100, used / FIXED_LIMIT_TOKENS * 100);
-    o.cachePct = (Number(latest.cacheHitRate) || 0) * 100;
+    if (used > 0) {
+      o.ctxPct = Math.min(100, used / modelWindow(model) * 100);
+      o.compactPct = Math.min(100, used / FIXED_LIMIT_TOKENS * 100);
+      o.cachePct = (Number(latest.cacheHitRate) || 0) * 100;
+    } else {
+      o.ctxPct = null;
+      o.compactPct = null;
+      o.cachePct = null;
+    }
     if (sp) {
       o.tps = Number.isFinite(sp.calibratedTps)
         ? sp.calibratedTps

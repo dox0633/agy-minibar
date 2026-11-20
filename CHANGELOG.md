@@ -15,6 +15,15 @@
 
 
 
+## [1.8.6] - 2026-11-20
+
+### 根治工具调用后上下文（CTX）与缓存命中（HIT）清零不显示问题
+
+- **修复多工具调用对话上下文与缓存命中偶发不显示（显示为「0%」或「—」）**：
+  - **根本原因排除**：Antigravity Agent 在执行 `run_command`、`read_file` 等工具后，会将工具输出以 `source: 'MODEL', type: 'GENERIC'` 的形式写入 `transcript.jsonl`。旧解析逻辑误将工具输出认定为模型生成步，导致取最新步骤时因工具返回步 Token 统计为空而把整轮会话真实的 `contextUsed` 与 `cacheHitRate` 冲刷成 0；
+  - **模型回复步类型精准收紧**：严格限定仅真正的模型回复（`type: 'PLANNER_RESPONSE'`）或带 Token 统计字段的条目参与模型步序列，坚决过滤 `type: 'GENERIC'` 的工具结果，杜绝工具输出覆盖真实会话上下文；
+  - **Language Server 元数据使用量补充**：在测速索引中同步提取 Language Server 的 `inputTokens` 与 `cacheReadTokens`，在缺少本地行统计时自动兜底补齐，保证上下文（CTX）与缓存（HIT）在任意工具调用前后均平稳展示。
+
 ## [1.8.5] - 2026-11-20
 
 ### 测速引擎物理校准与超长会话大报文防溢出
