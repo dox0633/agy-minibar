@@ -1083,11 +1083,11 @@
       cTps.ic.setAttribute('class', 'ic ic-bolt');
     }
 
-    // TPS = 纯解码速度（output_tokens / streaming_seconds），与 DSH 下方 tok/s 同口径
+    // TPS = 真实解码/整步生成测速（物理范围 <= 320 tok/s，防突刺校准）
     cTps.v.textContent = tpsVal > 0 ? tpsVal.toFixed(0) : '—';
     const statusText = isGen ? '正在生成... ' : '';
     const effTtft = x.ttft || lastValidTtft;
-    if (effTtft) cTps.g.title = statusText + '纯生成速度 ' + (tpsVal > 0 ? tpsVal.toFixed(1) : '—') + ' tok/s | 首字响应 ' + effTtft.toFixed(2) + 's' + (x.model ? ' (' + x.model + ')' : '');
+    if (effTtft) cTps.g.title = statusText + '生成测速 ' + (tpsVal > 0 ? tpsVal.toFixed(1) : '—') + ' tok/s | 首字响应 ' + effTtft.toFixed(2) + 's' + (x.model ? ' (' + x.model + ')' : '');
     else if (x.model) cTps.g.title = statusText + '模型: ' + x.model + (tpsVal > 0 ? ' (' + tpsVal.toFixed(1) + ' tok/s)' : '');
 
     // 账号项：显示 payload 下行的账号与账号列表快照

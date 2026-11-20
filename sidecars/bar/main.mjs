@@ -327,15 +327,17 @@ async function discoverLsConnection(force = false) {
   const envPort = Number(envAddr.split(':').pop());
   if (envPort > 0 && !ports.includes(envPort)) ports.unshift(envPort);
 
-  // 3) 探测每个端口，寻找返回 200 的活跃端口
+  // 3) 探测每个端口，寻找返回 200 的活跃端口（支持 http 与 https 自适应）
   for (const port of ports) {
     for (const host of ['127.0.0.1', 'localhost']) {
-      const base = `http://${host}:${port}`;
-      const testRes = await postHttp(base, 'RetrieveUserQuotaSummary', { forceRefresh: false }, csrf, 1500);
-      if (testRes.ok) {
-        lsConn = { at: Date.now(), base, csrf, pid };
-        log('LS_DISCOVERED', `base=${base} pid=${pid} csrf=...${csrf.slice(-6)}`);
-        return lsConn;
+      for (const proto of ['http', 'https']) {
+        const base = `${proto}://${host}:${port}`;
+        const testRes = await postHttp(base, 'RetrieveUserQuotaSummary', { forceRefresh: false }, csrf, 1500);
+        if (testRes.ok) {
+          lsConn = { at: Date.now(), base, csrf, pid };
+          log('LS_DISCOVERED', `base=${base} pid=${pid} csrf=...${csrf.slice(-6)}`);
+          return lsConn;
+        }
       }
     }
   }
@@ -365,7 +367,7 @@ function postHttp(base, method, body, csrf, timeout = 4000) {
     }, res => {
       let text = '';
       let n = 0;
-      res.on('data', c => { n += c.length; if (n > 8e6) { req.destroy(); return fin({ ok: false, status: res.statusCode }); } text += c; });
+      res.on('data', c => { n += c.length; if (n > 32e6) { req.destroy(); return fin({ ok: false, status: res.statusCode }); } text += c; });
       res.on('end', () => {
         if (res.statusCode !== 200) {
           if (res.statusCode === 429) lastRpcError = { code: 429, text: '请求限流 (429)', at: Date.now() };
@@ -538,7 +540,9 @@ async function stats(convId) {
     o.compactPct = Math.min(100, used / FIXED_LIMIT_TOKENS * 100);
     o.cachePct = (Number(latest.cacheHitRate) || 0) * 100;
     if (sp) {
-      o.tps = Number.isFinite(sp.streamingTps) ? sp.streamingTps : (Number.isFinite(sp.tps) ? sp.tps : null);
+      o.tps = Number.isFinite(sp.calibratedTps)
+        ? sp.calibratedTps
+        : (Number.isFinite(sp.streamingTps) ? sp.streamingTps : (Number.isFinite(sp.tps) ? sp.tps : null));
       o.ttft = Number.isFinite(sp.ttftSec) ? sp.ttftSec : null;
     }
   }

@@ -150,7 +150,10 @@ export function parseTranscriptText(text) {
       entry?.cache_read_tokens !== undefined ||
       entry?.output_tokens !== undefined;
 
-    if (!hasTokenFields) continue;
+    const isModelStep = entry?.type === 'PLANNER_RESPONSE' || entry?.source === 'MODEL';
+
+    // 允许缺少 token 字段但属于模型响应的步骤进入序列，以便与 generatorMetadata stepIndices 对齐
+    if (!hasTokenFields && !isModelStep) continue;
 
     const inputTokens = toNonNegInt(entry.input_tokens);
     const cacheReadTokens = toNonNegInt(entry.cache_read_tokens);
@@ -267,6 +270,8 @@ export function parseDurationSec(raw) {
 }
 
 const MIN_STREAMING_SEC_FOR_TPS = 0.02;
+const MIN_SUSTAINED_STREAMING_SEC = 0.5;
+const MAX_REALISTIC_TPS = 320;
 
 /**
  * Build a Map<stepIndex, speedEntry> from LanguageServerService
@@ -288,15 +293,36 @@ export function buildSpeedIndex(generatorMetadata) {
         : (ttftSec ?? streamingSec ?? null);
     const outputTokens = toNonNegInt(cm.usage?.outputTokens);
     const thinkingTokens = toNonNegInt(cm.usage?.thinkingOutputTokens);
+    const responseOutputTokens = toNonNegInt(cm.usage?.responseOutputTokens);
 
-    const streamingTps =
-      outputTokens > 0 && streamingSec !== null && streamingSec >= MIN_STREAMING_SEC_FOR_TPS
-        ? Number((outputTokens / streamingSec).toFixed(1))
+    if (outputTokens <= 0) continue;
+
+    // 原始流式生成速率
+    const rawStreamingTps =
+      streamingSec !== null && streamingSec >= MIN_STREAMING_SEC_FOR_TPS
+        ? outputTokens / streamingSec
         : null;
-    const tps =
-      outputTokens > 0 && durationSec !== null && durationSec > 0
+
+    // 完整生成总耗时吞吐速率
+    const totalTps =
+      durationSec !== null && durationSec > 0
         ? Number((outputTokens / durationSec).toFixed(1))
         : null;
+
+    // 校准后 TPS：
+    // 只有在持续流式输出（>= 0.5s）且物理速率合理（<= 320 tok/s）时，采纳纯流速；
+    // 对于短工具调用、思考突发或 TCP 缓冲单次冲刷（秒数极小导致上千 tok/s），平滑回退至整步吞吐速率，杜绝 6000+ 畸高值
+    let calibratedTps = null;
+    let sustainedStreamingTps = null;
+
+    if (rawStreamingTps !== null && streamingSec >= MIN_SUSTAINED_STREAMING_SEC && rawStreamingTps <= MAX_REALISTIC_TPS) {
+      sustainedStreamingTps = Number(rawStreamingTps.toFixed(1));
+      calibratedTps = sustainedStreamingTps;
+    } else if (totalTps !== null && totalTps > 0) {
+      calibratedTps = Math.min(MAX_REALISTIC_TPS, totalTps);
+    } else if (rawStreamingTps !== null) {
+      calibratedTps = Math.min(MAX_REALISTIC_TPS, Number(rawStreamingTps.toFixed(1)));
+    }
 
     const entry = {
       ttftSec: ttftSec !== null ? Number(ttftSec.toFixed(2)) : null,
@@ -304,8 +330,12 @@ export function buildSpeedIndex(generatorMetadata) {
       durationSec: durationSec !== null ? Number(durationSec.toFixed(2)) : null,
       outputTokens,
       thinkingTokens,
-      streamingTps,
-      tps,
+      responseOutputTokens,
+      streamingTps: sustainedStreamingTps,
+      rawStreamingTps: rawStreamingTps !== null ? Number(rawStreamingTps.toFixed(1)) : null,
+      durationTps: totalTps,
+      tps: calibratedTps,
+      calibratedTps,
       model: cm.responseModel || cm.model || '',
     };
 
@@ -330,19 +360,46 @@ export function enrichSummaryWithSpeed(summary, speedIndex) {
   let latest = summary.latest;
   if (latest) {
     let sp = speedIndex.get(latest.stepIndex) || null;
-    if (!sp) {
-      // latest 可能是无 chatModel metadata 的步骤（如 PLANNER_RESPONSE）：
-      // 向前回溯最近一个有 speed 数据的主模型调用，避免 TPS/TTFT 误显示为空
-      for (let i = summary.series.length - 1; i >= 0 && !sp; i--) {
-        sp = speedIndex.get(summary.series[i].stepIndex) || null;
+    if (!sp || (sp.outputTokens === 0 && !sp.tps)) {
+      // latest 可能是无 chatModel metadata 的步骤（如纯工具输出）：
+      // 向前回溯最近一个有有效测速数据的主模型调用，避免 TPS/TTFT 误显示为空
+      for (let i = summary.series.length - 1; i >= 0; i--) {
+        const cand = speedIndex.get(summary.series[i].stepIndex);
+        if (cand && (cand.outputTokens > 0 || cand.tps !== null)) {
+          sp = cand;
+          break;
+        }
       }
       if (!sp && speedIndex.size > 0) {
-        // 全局兜底：取 speedIndex 中步数最大的记录
+        // 全局兜底：从 speedIndex 倒序寻找步数最大且有有效测速的记录
         const sorted = [...speedIndex.entries()].sort((a, b) => b[0] - a[0]);
-        if (sorted.length > 0) sp = sorted[0][1];
+        for (const [, cand] of sorted) {
+          if (cand && (cand.outputTokens > 0 || cand.tps !== null)) {
+            sp = cand;
+            break;
+          }
+        }
+        if (!sp && sorted.length > 0) sp = sorted[0][1];
       }
     }
     latest = sp ? { ...latest, speed: sp } : latest;
+  } else if (speedIndex.size > 0) {
+    // summary.latest 原本为 null（例如 transcript 缺少 token 字段）时的兜底合成
+    const sorted = [...speedIndex.entries()].sort((a, b) => b[0] - a[0]);
+    for (const [stepNum, sp] of sorted) {
+      if (sp && (sp.outputTokens > 0 || sp.tps !== null)) {
+        latest = {
+          stepIndex: stepNum,
+          contextUsed: 0,
+          inputTokens: 0,
+          outputTokens: sp.outputTokens,
+          cacheReadTokens: 0,
+          cacheHitRate: 0,
+          speed: sp,
+        };
+        break;
+      }
+    }
   }
 
   const recentTurns = (summary.recentTurns || []).map((t) => {
@@ -364,7 +421,7 @@ export function enrichSummaryWithSpeed(summary, speedIndex) {
     let sumTotalOut = 0;
     let sumTotalSec = 0;
     for (const e of entries) {
-      if (e.outputTokens > 0 && e.streamingSec !== null && e.streamingSec >= MIN_STREAMING_SEC_FOR_TPS) {
+      if (e.outputTokens > 0 && e.streamingSec !== null && e.streamingSec >= MIN_SUSTAINED_STREAMING_SEC) {
         sumStreamOut += e.outputTokens;
         sumStreamSec += e.streamingSec;
       }
@@ -374,12 +431,18 @@ export function enrichSummaryWithSpeed(summary, speedIndex) {
       }
     }
 
+    const sustainedStreamTps = (sumStreamSec >= MIN_SUSTAINED_STREAMING_SEC && (sumStreamOut / sumStreamSec) <= MAX_REALISTIC_TPS)
+      ? Number((sumStreamOut / sumStreamSec).toFixed(1))
+      : null;
+    const turnTotalTps = sumTotalSec > 0 ? Number((sumTotalOut / sumTotalSec).toFixed(1)) : null;
+    const turnCalibratedTps = sustainedStreamTps ?? (turnTotalTps !== null ? Math.min(MAX_REALISTIC_TPS, turnTotalTps) : null);
+
     return {
       ...t,
       speed: {
         ttftSec: firstEntry.ttftSec,
-        streamingTps: sumStreamSec > 0 ? Number((sumStreamOut / sumStreamSec).toFixed(1)) : null,
-        tps: sumTotalSec > 0 ? Number((sumTotalOut / sumTotalSec).toFixed(1)) : null,
+        streamingTps: sustainedStreamTps,
+        tps: turnCalibratedTps,
         durationSec: sumTotalSec > 0 ? Number(sumTotalSec.toFixed(2)) : null,
         model: firstEntry.model || '',
       },
@@ -399,7 +462,7 @@ export function enrichSummaryWithSpeed(summary, speedIndex) {
       ttftSum += e.ttftSec;
       ttftCount += 1;
     }
-    if (e.outputTokens > 0 && e.streamingSec !== null && e.streamingSec >= MIN_STREAMING_SEC_FOR_TPS) {
+    if (e.outputTokens > 0 && e.streamingSec !== null && e.streamingSec >= MIN_SUSTAINED_STREAMING_SEC && (e.outputTokens / e.streamingSec) <= MAX_REALISTIC_TPS) {
       streamOutSum += e.outputTokens;
       streamSecSum += e.streamingSec;
     }
