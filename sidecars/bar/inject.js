@@ -5,7 +5,7 @@
 //  2. 全局只允许一个 #agy-minibar-host；
 //  3. 只改文本与 SVG 属性，不做结构性增删。
 (() => {
-  const VER = 55;
+  const VER = 56;
   const HOST_ID = 'agy-minibar-host';
   if (window.__AGY_MINIBAR && window.__AGY_MINIBAR.ver === VER) return;
   try {
@@ -865,18 +865,21 @@
       const mailWrap = el('span', 'p-mailwrap');
       const mail = el('span', 'p-mail', a.email);
       mailWrap.appendChild(mail);
-      if (typeof a.geminiWeekly === 'number') {
-        const qTag = el('span', 'p-quota', '周' + Math.round(a.geminiWeekly) + '%');
-        if (a.quotaSource === 'captured') {
+      if (typeof a.geminiWeekly === 'number' || typeof a.gemini5h === 'number') {
+        const parts = [];
+        if (typeof a.gemini5h === 'number') parts.push('5h ' + Math.round(a.gemini5h) + '%');
+        if (typeof a.geminiWeekly === 'number') parts.push('周 ' + Math.round(a.geminiWeekly) + '%');
+        const qTag = el('span', 'p-quota', parts.join(' · '));
+        if (a.isCurrent) {
+          qTag.title = '实时配额（当前活跃账号）';
+        } else if (a.isAutoReset || a.quotaSource === 'auto-reset') {
+          qTag.title = '已过重置周期，智能推演回满 (100%)';
+        } else if (a.quotaSource === 'captured') {
           const ageDays = a.quotaUpdatedAt ? Math.floor((Date.now() - a.quotaUpdatedAt) / 86400000) : null;
-          qTag.title = '切换时捕获的实时配额' + (ageDays !== null && ageDays > 0 ? '（' + (ageDays === 0 ? '今天' : ageDays + ' 天前') + '）' : '') + '；周额度 7 天重置';
+          qTag.title = '切换时捕获的快照' + (ageDays !== null && ageDays > 0 ? '（' + ageDays + ' 天前）' : '（今天）') + '；5h满5小时自动回满';
         } else if (a.quotaSource === 'cache') {
-          const ageDays = a.quotaUpdatedAt ? Math.floor((Date.now() - a.quotaUpdatedAt) / 86400000) : null;
-          qTag.title = 'IDE 缓存快照' + (ageDays !== null && ageDays > 0 ? '（' + ageDays + ' 天前）' : '') + '，非实时；周额度通常 7 天重置';
-        } else {
-          qTag.title = '实时配额（当前账号）';
+          qTag.title = 'IDE 缓存快照，非实时';
         }
-        qTag.title = 'IDE 缓存的 Gemini 周额度剩余';
         mailWrap.appendChild(qTag);
       }
       let tagText = a.isCurrent ? '当前' : '切号';
@@ -912,6 +915,19 @@
         });
       }
       listEl.appendChild(row);
+    }
+    const footEl = panel.querySelector('.p-foot');
+    if (footEl) {
+      footEl.innerHTML = '';
+      const resetBtn = el('div', 'p-add', '⚡ 标为全账号已重置 (100%)');
+      resetBtn.title = '当全服或时间到了配额重置时，一键将所有离线账号校准为 100%';
+      resetBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        window.__AGY_MINIBAR.pendingResetQuotas = true;
+        resetBtn.textContent = '✓ 已校准为 100%';
+        setTimeout(() => { if (panel) renderPanel(); }, 400);
+      });
+      footEl.appendChild(resetBtn);
     }
   }
   let switchingTarget = '';

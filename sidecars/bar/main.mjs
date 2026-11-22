@@ -83,8 +83,20 @@ function acquireSingletonLock() {
 // 待命模式：若同伴持有锁，绝不直接 process.exit(0)（否则 restart_policy: always 会导致死循环狂刷拉起）
 if (!acquireSingletonLock()) {
   log('SINGLETON_STANDBY', `pid=${process.pid} -> standby waiting for lock`);
+  let standbyTicks = 0;
   while (!acquireSingletonLock()) {
     await new Promise(r => setTimeout(r, 5000));
+    standbyTicks++;
+    // 每 20 秒检查自己关联的 LS 是否还在监听；若自身所属的 LS 早已死亡，主动退出避免无意义待命堆积
+    if (standbyTicks % 4 === 0 && process.env.ANTIGRAVITY_LS_ADDRESS) {
+      try {
+        const ping = await postHttp(`http://${process.env.ANTIGRAVITY_LS_ADDRESS}`, 'RetrieveUserQuotaSummary', {}, process.env.ANTIGRAVITY_CSRF_TOKEN, 800);
+        if (!ping.ok && (ping.err || ping.status === 401)) {
+          log('STANDBY_DEAD_EXIT', `creator LS is gone; exiting pid=${process.pid}`);
+          process.exit(0);
+        }
+      } catch {}
+    }
   }
   log('SINGLETON_PROMOTED', `pid=${process.pid} -> promoted to active`);
 } else {
@@ -278,22 +290,37 @@ async function discoverLsConnection(force = false) {
     return lsConn;
   }
 
+  // 0) 极速直连通道（环境变量注入，仅需 ~20ms）：App 刚启动或更新自启时秒级挂载
+  const envAddr = String(process.env.ANTIGRAVITY_LS_ADDRESS || '');
+  const envCsrf = String(process.env.ANTIGRAVITY_CSRF_TOKEN || '');
+  if (envAddr && envCsrf) {
+    for (const proto of ['http', 'https']) {
+      const fastBase = `${proto}://${envAddr}`;
+      const r = await postHttp(fastBase, 'RetrieveUserQuotaSummary', { forceRefresh: false }, envCsrf, 800);
+      if (r && r.ok) {
+        lsConn = { at: Date.now(), base: fastBase, csrf: envCsrf, pid: 0 };
+        log('LS_DISCOVERED', `fast-path base=${fastBase} csrf=...${envCsrf.slice(-6)}`);
+        return lsConn;
+      }
+    }
+  }
+
   let pid = null;
   let csrf = null;
   // 1) 通过 wmic 获取 language_server.exe 的命令行（提取当前活跃的 --csrf_token）
   try {
     const csv = execSync('wmic process where "name=\'language_server.exe\'" get ProcessId,CommandLine /format:csv', {
-      encoding: 'utf8', windowsHide: true, timeout: 5000,
+      encoding: 'utf8', windowsHide: true, timeout: 3000,
     });
     for (const line of csv.split(/\r?\n/)) {
       if (!line.includes('language_server.exe')) continue;
       const parts = line.split(',');
       const cmd = parts[1] || '';
       const p = parts[2] || '';
+      if (p.trim()) pid = Number(p.trim());
       const m = cmd.match(/--csrf_token\s+([0-9a-f-]+)/i);
       if (m) {
         csrf = m[1];
-        pid = Number(p.trim());
         break;
       }
     }
@@ -303,10 +330,10 @@ async function discoverLsConnection(force = false) {
 
   if (!csrf) csrf = String(process.env.ANTIGRAVITY_CSRF_TOKEN || '');
 
-  // 2) 通过 netstat 快速提取监听端口（耗时约 50ms）
+  // 2) 通过 netstat 快速提取监听端口
   const ports = [];
   try {
-    const netstat = execSync('netstat -ano -p tcp', { encoding: 'utf8', windowsHide: true, timeout: 5000 });
+    const netstat = execSync('netstat -ano -p tcp', { encoding: 'utf8', windowsHide: true, timeout: 3000 });
     for (const line of netstat.split(/\r?\n/)) {
       if (!line.includes('LISTENING')) continue;
       const parts = line.trim().split(/\s+/);
@@ -322,25 +349,35 @@ async function discoverLsConnection(force = false) {
     log('NETSTAT_ERR', e.message);
   }
 
-  // 环境变量中预设端口作为补充候选项
-  const envAddr = String(process.env.ANTIGRAVITY_LS_ADDRESS || '');
+  // 环境变量中预设端口作为最高优先级候选
   const envPort = Number(envAddr.split(':').pop());
   if (envPort > 0 && !ports.includes(envPort)) ports.unshift(envPort);
 
-  // 3) 探测每个端口，寻找返回 200 的活跃端口（支持 http 与 https 自适应）
-  for (const port of ports) {
+  // 3) 并发快速探测候选端口（限制最多探测前 8 个候选，防止阻塞主循环）
+  const candidates = ports.slice(0, 8);
+  const tasks = [];
+  for (const port of candidates) {
     for (const host of ['127.0.0.1', 'localhost']) {
       for (const proto of ['http', 'https']) {
         const base = `${proto}://${host}:${port}`;
-        const testRes = await postHttp(base, 'RetrieveUserQuotaSummary', { forceRefresh: false }, csrf, 1500);
-        if (testRes.ok) {
-          lsConn = { at: Date.now(), base, csrf, pid };
-          log('LS_DISCOVERED', `base=${base} pid=${pid} csrf=...${csrf.slice(-6)}`);
-          return lsConn;
-        }
+        tasks.push(
+          postHttp(base, 'RetrieveUserQuotaSummary', { forceRefresh: false }, csrf, 1000)
+            .then(res => (res.ok ? { base, csrf, pid } : null))
+            .catch(() => null)
+        );
       }
     }
   }
+
+  try {
+    const results = await Promise.all(tasks);
+    const found = results.find(Boolean);
+    if (found) {
+      lsConn = { at: Date.now(), base: found.base, csrf: found.csrf, pid: found.pid };
+      log('LS_DISCOVERED', `parallel base=${found.base} pid=${found.pid} csrf=...${found.csrf.slice(-6)}`);
+      return lsConn;
+    }
+  } catch {}
 
   return lsConn.base ? lsConn : null;
 }
@@ -384,19 +421,35 @@ function postHttp(base, method, body, csrf, timeout = 4000) {
   });
 }
 
+let lsFailureCount = 0;
+
 async function rpc(method, body, timeout = 4000) {
   let conn = await discoverLsConnection();
   if (conn && conn.base) {
     const res = await postHttp(conn.base, method, body, conn.csrf, timeout);
-    if (res.ok) return res.data;
+    if (res.ok) {
+      lsFailureCount = 0;
+      return res.data;
+    }
     if (res.status === 401 || res.err || res.timeout) {
       // 鉴权失败或连接断开（例如切号后 LS 重启），强制重新探测
       conn = await discoverLsConnection(true);
       if (conn && conn.base) {
         const retryRes = await postHttp(conn.base, method, body, conn.csrf, timeout);
-        if (retryRes.ok) return retryRes.data;
+        if (retryRes.ok) {
+          lsFailureCount = 0;
+          return retryRes.data;
+        }
       }
     }
+  }
+  lsFailureCount++;
+  // 如果与 Language Server 连续失联超过 6 次（约 15~20 秒），说明 LS 已重启或被更换，自身作为旧侧载已无法获得新 Token
+  // 主动解除单例锁并优雅退出，让宿主拉起的新侧载（带有最新 CSRF Token 与端口）接管
+  if (lsFailureCount >= 6) {
+    log('LS_LOST_AUTO_EXIT', `consecutive failures=${lsFailureCount}; yielding lock for fresh host sidecar`);
+    try { unlinkSync(LOCK_FILE); } catch {}
+    process.exit(0);
   }
   return null;
 }
@@ -434,13 +487,13 @@ function formatResetTime(iso) {
   return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
 }
 
-async function quota(model = '') {
+async function quota(model = '', force = false) {
   const now = Date.now();
-  // 缓存 15 秒（模型改变时立即刷新）
-  if (S.q.d && now - S.q.at < 15000 && S.q.model === model) return S.q.d;
+  // 缓存 8 秒（模型改变或显式触发强刷时立即刷新）
+  if (!force && S.q.d && now - S.q.at < 8000 && S.q.model === model) return S.q.d;
 
   // 定期带 forceRefresh: true 向上游 Google 查询最新配额，避免 LS 返回内部陈旧快照
-  const shouldForce = !S.q.at || (now - S.q.at > 30000);
+  const shouldForce = force || !S.q.at || (now - S.q.at >= 8000);
   const r = await rpc('RetrieveUserQuotaSummary', { forceRefresh: shouldForce }, 5000);
   const p = r && r.response !== undefined ? r.response : r;
   if (!p || typeof p !== 'object') return S.q.d || { h5: null, wk: null };
@@ -467,15 +520,17 @@ async function quota(model = '') {
 
   const pick = w => {
     const hit = pool.find(b => winOf(b) === w);
-    return hit ? { pct: frac(hit), reset: formatResetTime(hit.resetTime) } : null;
+    return hit ? { pct: frac(hit), reset: formatResetTime(hit.resetTime), resetIso: hit.resetTime || '' } : null;
   };
   const h5Obj = pick('5h');
   const wkObj = pick('weekly');
   const d = {
     h5: h5Obj ? h5Obj.pct : null,
     h5Reset: h5Obj ? h5Obj.reset : '',
+    h5ResetIso: h5Obj ? h5Obj.resetIso : '',
     wk: wkObj ? wkObj.pct : null,
     wkReset: wkObj ? wkObj.reset : '',
+    wkResetIso: wkObj ? wkObj.resetIso : '',
   };
   S.q = { d, at: now, model };
   return d;
@@ -628,9 +683,10 @@ class Cdp {
 }
 
 /* ---------------- 本地实时配额记录 ----------------
- * 每次账号成为"当前"时，把它的 LS 实时配额写入本地 JSON。
- * 非当前账号的卡片优先展示这份记录（比 IDE 缓存新鲜），
- * 7 天后视为过期（周额度按周重置，过期即无意义）。
+ * 每次账号成为"当前"时，把它的 LS 实时配额与重置时间写入本地 JSON。
+ * 非当前账号的卡片优先展示这份记录，并引入「时间窗口自动过期重置推演」：
+ *   - 5H 额度：距上次记录超过 5 小时或超过 resetTime，自动回满为 100%
+ *   - 周额度：跨越周 resetTime，自动回满为 100%
  */
 const LQ_FILE = join(homedir(), '.gemini', 'antigravity', 'sidecar_data', 'agy-minibar', 'live-quota.json');
 
@@ -638,14 +694,38 @@ function loadLiveQuota() {
   try { return JSON.parse(readFileSync(LQ_FILE, 'utf-8')); } catch { return {}; }
 }
 
-function saveLiveQuota(email, h5, wk) {
+function saveLiveQuota(email, h5, wk, h5ResetIso = '', wkResetIso = '') {
   try {
     const store = loadLiveQuota();
-    store[String(email).toLowerCase()] = { h5, wk, at: Date.now() };
+    const existing = store[String(email).toLowerCase()] || {};
+    store[String(email).toLowerCase()] = {
+      h5,
+      wk,
+      h5ResetIso: h5ResetIso || existing.h5ResetIso || '',
+      wkResetIso: wkResetIso || existing.wkResetIso || '',
+      at: Date.now()
+    };
     const tmp = LQ_FILE + '.tmp';
     writeFileSync(tmp, JSON.stringify(store, null, 2), 'utf-8');
     renameSync(tmp, LQ_FILE);
   } catch { /* 记录失败不影响主流程 */ }
+}
+
+function resetAllQuotasTo100() {
+  try {
+    const store = loadLiveQuota();
+    const now = Date.now();
+    for (const k in store) {
+      store[k].h5 = 100;
+      store[k].wk = 100;
+      store[k].at = now;
+      store[k].manualReset = true;
+    }
+    const tmp = LQ_FILE + '.tmp';
+    writeFileSync(tmp, JSON.stringify(store, null, 2), 'utf-8');
+    renameSync(tmp, LQ_FILE);
+    return true;
+  } catch { return false; }
 }
 
 function liveQuotaRecord(email) {
@@ -653,9 +733,29 @@ function liveQuotaRecord(email) {
     const store = loadLiveQuota();
     const hit = store[String(email).toLowerCase()];
     if (!hit) return null;
-    // 超过 7 天的记录视为过期（周额度已重置，数值不可信）
-    if (Date.now() - hit.at > 7 * 86400000) return null;
-    return hit;
+    const now = Date.now();
+    // 超过 14 天的记录完全失效
+    if (now - hit.at > 14 * 86400000) return null;
+
+    let h5 = typeof hit.h5 === 'number' ? hit.h5 : null;
+    let wk = typeof hit.wk === 'number' ? hit.wk : null;
+    let isAutoReset = Boolean(hit.manualReset);
+
+    // 5H 额度自然重置推演：
+    // 若距记录时间已超 5 小时，或已越过 5H 预估重置时刻，云端必然已回满 100%
+    if ((hit.h5ResetIso && now >= Date.parse(hit.h5ResetIso)) || (now - hit.at >= 5 * 3600_000)) {
+      h5 = 100;
+      isAutoReset = true;
+    }
+
+    // 周额度自然重置推演：
+    // 若已越过周重置时刻，云端必然已回满 100%
+    if (hit.wkResetIso && now >= Date.parse(hit.wkResetIso)) {
+      wk = 100;
+      isAutoReset = true;
+    }
+
+    return { ...hit, h5, wk, isAutoReset };
   } catch { return null; }
 }
 
@@ -689,6 +789,7 @@ function accountsSnapshot(realtime) {
     let gemini5h = null;
     let quotaSource = 'none';
     let quotaUpdatedAt = 0;
+    let isAutoReset = false;
     if (isCur && realtime && typeof realtime.wk === 'number') {
       geminiWeekly = realtime.wk;
       gemini5h = typeof realtime.h5 === 'number' ? realtime.h5 : null;
@@ -699,7 +800,8 @@ function accountsSnapshot(realtime) {
       if (local) {
         geminiWeekly = local.wk;
         gemini5h = local.h5;
-        quotaSource = 'captured';
+        isAutoReset = Boolean(local.isAutoReset);
+        quotaSource = isAutoReset ? 'auto-reset' : 'captured';
         quotaUpdatedAt = local.at;
       } else if (q) {
         geminiWeekly = q.models['gemini:weekly']?.remaining ?? null;
@@ -714,6 +816,7 @@ function accountsSnapshot(realtime) {
       isCurrent: isCur,
       geminiWeekly,
       gemini5h,
+      isAutoReset,
       quotaSource,
       quotaUpdatedAt,
       tier: q ? q.tier : '',
@@ -744,8 +847,16 @@ async function tick() {
     }
 
     const st = await stats(S.convId);
+    const wasGenerating = !!S.lastGenerating;
+    S.lastGenerating = !!st.isGenerating;
+    const turnsChanged = typeof S.lastTurns === 'number' && st.turns > S.lastTurns;
+    S.lastTurns = st.turns;
+    // 当生成刚刚结束，或者轮次增加（有新消息输出完毕）时，立即强刷额度，确保用户看到实时扣减
+    const forceQuota = (wasGenerating && !st.isGenerating) || turnsChanged;
+    if (forceQuota) S.q.at = 0;
+
     let q = { h5: null, wk: null };
-    try { q = (await quota(st.model)) || q; } catch {}
+    try { q = (await quota(st.model, forceQuota)) || q; } catch {}
 
     let errorNotice = null;
     const ignoreRpc = SW.ignoreRpcErrorUntil && Date.now() < SW.ignoreRpcErrorUntil;
@@ -790,7 +901,7 @@ async function tick() {
 
     // 记录当前账号的实时配额（幂等：值不变时磁盘写入由调用方规避——这里直接写，每分钟一次成本低）
     if (typeof payload.wk === 'number' && payload.account) {
-      saveLiveQuota(payload.account, payload.h5, payload.wk);
+      saveLiveQuota(payload.account, payload.h5, payload.wk, q.h5ResetIso, q.wkResetIso);
     }
 
     const ver = srcVer();
@@ -842,6 +953,17 @@ async function tick() {
           wk: S.q.d ? S.q.d.wk : q.wk,
         };
         await cdp.eval(`window.__AGY_MINIBAR && window.__AGY_MINIBAR.update(${JSON.stringify(immPayload)})`);
+      } catch {}
+    }
+    if (r && r.pendingResetQuotas === true) {
+      resetAllQuotasTo100();
+      log('QUOTAS_RESET_ALL_100');
+      try {
+        const resetPayload = {
+          ...payload,
+          accounts: accountsSnapshot(q),
+        };
+        await cdp.eval(`window.__AGY_MINIBAR && window.__AGY_MINIBAR.update(${JSON.stringify(resetPayload)})`);
       } catch {}
     }
     if (r && r.pendingCapture === true) {
@@ -1076,7 +1198,9 @@ async function switchToAccount(email) {
       // 清空时间戳使新 LS 拉起后第一时间拉取最新真实额度，但在此之前 S.q.d 始终保持有效数值
       S.q.at = 0;
       S.q.model = '';
-      setTimeout(() => { discoverLsConnection(true).catch(() => {}); }, 2500);
+      log('SWITCH_YIELD_LOCK', `credential swapped to ${target}; exiting to let fresh host sidecar take over with new CSRF token`);
+      try { unlinkSync(LOCK_FILE); } catch {}
+      setTimeout(() => { process.exit(0); }, 1500);
     } catch (e) { log('LS_RESTART_FAIL', e.message); }
 
     SW.activeEmail = target;
