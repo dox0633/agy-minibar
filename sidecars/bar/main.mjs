@@ -715,11 +715,23 @@ function resetAllQuotasTo100() {
   try {
     const store = loadLiveQuota();
     const now = Date.now();
-    for (const k in store) {
-      store[k].h5 = 100;
-      store[k].wk = 100;
-      store[k].at = now;
-      store[k].manualReset = true;
+    // 同步收录账号库与 google_accounts.json 中的全部已知账号，确保所有离线账号都被校准
+    const emails = new Set(Object.keys(store));
+    for (const a of loadLibrary().accounts) if (a && a.email) emails.add(String(a.email).toLowerCase());
+    try {
+      const ga = JSON.parse(readFileSync(join(homedir(), '.gemini', 'google_accounts.json'), 'utf-8'));
+      if (ga.active) emails.add(String(ga.active).toLowerCase());
+      for (const e of (Array.isArray(ga.old) ? ga.old : [])) if (e) emails.add(String(e).toLowerCase());
+    } catch {}
+    for (const k of emails) {
+      store[k] = {
+        h5: 100,
+        wk: 100,
+        h5ResetIso: '',
+        wkResetIso: '',
+        at: now,
+        manualReset: true,
+      };
     }
     const tmp = LQ_FILE + '.tmp';
     writeFileSync(tmp, JSON.stringify(store, null, 2), 'utf-8');
@@ -957,11 +969,18 @@ async function tick() {
     }
     if (r && r.pendingResetQuotas === true) {
       resetAllQuotasTo100();
+      S.q.at = 0;
+      let freshQ = q;
+      try { freshQ = (await quota(st.model, true)) || q; } catch {}
       log('QUOTAS_RESET_ALL_100');
       try {
         const resetPayload = {
           ...payload,
-          accounts: accountsSnapshot(q),
+          accounts: accountsSnapshot(freshQ),
+          h5: freshQ.h5,
+          h5Reset: freshQ.h5Reset || '',
+          wk: freshQ.wk,
+          wkReset: freshQ.wkReset || '',
         };
         await cdp.eval(`window.__AGY_MINIBAR && window.__AGY_MINIBAR.update(${JSON.stringify(resetPayload)})`);
       } catch {}

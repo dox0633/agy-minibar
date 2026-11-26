@@ -5,7 +5,7 @@
 //  2. 全局只允许一个 #agy-minibar-host；
 //  3. 只改文本与 SVG 属性，不做结构性增删。
 (() => {
-  const VER = 56;
+  const VER = 58;
   const HOST_ID = 'agy-minibar-host';
   if (window.__AGY_MINIBAR && window.__AGY_MINIBAR.ver === VER) return;
   try {
@@ -850,84 +850,96 @@
 
   /* ---- 账号弹出面板 ---- */
   let panel = null;
+  let lastResetClickAt = 0;
   function renderPanel() {
     if (!panel) return;
-    const listEl = panel.querySelector('.p-list');
-    listEl.innerHTML = '';
     const accs = Array.isArray(accData) ? accData : [];
-    if (!accs.length) {
-      listEl.innerHTML = '<div class="p-empty">未发现账号</div>';
-      return;
-    }
-    for (const a of accs) {
-      const row = el('div', 'p-row' + (a.isCurrent ? ' cur' : ''));
-      const dot = el('span', 'p-dot' + (a.isCurrent ? ' ok' : ''));
-      const mailWrap = el('span', 'p-mailwrap');
-      const mail = el('span', 'p-mail', a.email);
-      mailWrap.appendChild(mail);
-      if (typeof a.geminiWeekly === 'number' || typeof a.gemini5h === 'number') {
-        const parts = [];
-        if (typeof a.gemini5h === 'number') parts.push('5h ' + Math.round(a.gemini5h) + '%');
-        if (typeof a.geminiWeekly === 'number') parts.push('周 ' + Math.round(a.geminiWeekly) + '%');
-        const qTag = el('span', 'p-quota', parts.join(' · '));
-        if (a.isCurrent) {
-          qTag.title = '实时配额（当前活跃账号）';
-        } else if (a.isAutoReset || a.quotaSource === 'auto-reset') {
-          qTag.title = '已过重置周期，智能推演回满 (100%)';
-        } else if (a.quotaSource === 'captured') {
-          const ageDays = a.quotaUpdatedAt ? Math.floor((Date.now() - a.quotaUpdatedAt) / 86400000) : null;
-          qTag.title = '切换时捕获的快照' + (ageDays !== null && ageDays > 0 ? '（' + ageDays + ' 天前）' : '（今天）') + '；5h满5小时自动回满';
-        } else if (a.quotaSource === 'cache') {
-          qTag.title = 'IDE 缓存快照，非实时';
-        }
-        mailWrap.appendChild(qTag);
-      }
-      let tagText = a.isCurrent ? '当前' : '切号';
-      if (switchState === 'pending' && switchingTarget === a.email) tagText = '切换中…';
-      else if (switchState === 'ok' && switchingTarget === a.email) tagText = '完成';
-      else if (switchState.startsWith('fail') && switchingTarget === a.email) tagText = '失败';
-      const tag = el('span', 'p-tag', tagText);
-      row.appendChild(dot);
-      row.appendChild(mailWrap);
-      row.appendChild(tag);
-      if (!a.isCurrent) {
-        row.addEventListener('click', () => {
-          switchingTarget = a.email;
-          switchState = 'pending';
-          vAcc.textContent = shortEmail(a.email) + '…';
-          vAcc.style.opacity = '0.75';
-          // 若点击的目标账号有缓存额度，立即平滑预填圆环，杜绝数据跳变
-          if (typeof a.gemini5h === 'number' && typeof a.geminiWeekly === 'number') {
-            lastValidH5 = Math.round(a.gemini5h);
-            lastValidWk = Math.round(a.geminiWeekly);
-            const tH5 = lastValidH5 < 20 ? 'bad' : lastValidH5 < 40 ? 'warn' : '';
-            const tWk = lastValidWk < 20 ? 'bad' : lastValidWk < 40 ? 'warn' : '';
-            setRingProgress(ringH5.fl, lastValidH5, tH5);
-            setRingProgress(ringWk.fl, lastValidWk, tWk);
-            vH5.textContent = pct(lastValidH5);
-            tone(vH5, tH5);
-            vWk.textContent = pct(lastValidWk);
-            tone(vWk, tWk);
+    const listEl = panel.querySelector('.p-list');
+    const sig = JSON.stringify([accs.map(a => [a.email, a.isCurrent, Math.round(a.gemini5h ?? -1), Math.round(a.geminiWeekly ?? -1), a.quotaSource, a.isAutoReset]), switchState, switchingTarget]);
+    if (listEl.dataset.sig !== sig) {
+      listEl.dataset.sig = sig;
+      listEl.innerHTML = '';
+      if (!accs.length) {
+        listEl.innerHTML = '<div class="p-empty">未发现账号</div>';
+      } else {
+        for (const a of accs) {
+          const row = el('div', 'p-row' + (a.isCurrent ? ' cur' : ''));
+          const dot = el('span', 'p-dot' + (a.isCurrent ? ' ok' : ''));
+          const mailWrap = el('span', 'p-mailwrap');
+          const mail = el('span', 'p-mail', a.email);
+          mailWrap.appendChild(mail);
+          if (typeof a.geminiWeekly === 'number' || typeof a.gemini5h === 'number') {
+            const parts = [];
+            if (typeof a.gemini5h === 'number') parts.push('5h ' + Math.round(a.gemini5h) + '%');
+            if (typeof a.geminiWeekly === 'number') parts.push('周 ' + Math.round(a.geminiWeekly) + '%');
+            const qTag = el('span', 'p-quota', parts.join(' · '));
+            if (a.isCurrent) {
+              qTag.title = '实时配额（当前活跃账号）';
+            } else if (a.isAutoReset || a.quotaSource === 'auto-reset') {
+              qTag.title = '已过重置周期，智能推演回满 (100%)';
+            } else if (a.quotaSource === 'captured') {
+              const ageDays = a.quotaUpdatedAt ? Math.floor((Date.now() - a.quotaUpdatedAt) / 86400000) : null;
+              qTag.title = '切换时捕获的快照' + (ageDays !== null && ageDays > 0 ? '（' + ageDays + ' 天前）' : '（今天）') + '；5h满5小时自动回满';
+            } else if (a.quotaSource === 'cache') {
+              qTag.title = 'IDE 缓存快照，非实时';
+            }
+            mailWrap.appendChild(qTag);
           }
-          // 上行指令：sidecar 下一轮 tick 读走并执行
-          window.__AGY_MINIBAR.pendingSwitch = a.email;
-          renderPanel();
-        });
+          let tagText = a.isCurrent ? '当前' : '切号';
+          if (switchState === 'pending' && switchingTarget === a.email) tagText = '切换中…';
+          else if (switchState === 'ok' && switchingTarget === a.email) tagText = '完成';
+          else if (switchState.startsWith('fail') && switchingTarget === a.email) tagText = '失败';
+          const tag = el('span', 'p-tag', tagText);
+          row.appendChild(dot);
+          row.appendChild(mailWrap);
+          row.appendChild(tag);
+          if (!a.isCurrent) {
+            row.addEventListener('click', () => {
+              switchingTarget = a.email;
+              switchState = 'pending';
+              vAcc.textContent = shortEmail(a.email) + '…';
+              vAcc.style.opacity = '0.75';
+              // 若点击的目标账号有缓存额度，立即平滑预填圆环，杜绝数据跳变
+              if (typeof a.gemini5h === 'number' && typeof a.geminiWeekly === 'number') {
+                lastValidH5 = Math.round(a.gemini5h);
+                lastValidWk = Math.round(a.geminiWeekly);
+                const tH5 = lastValidH5 < 20 ? 'bad' : lastValidH5 < 40 ? 'warn' : '';
+                const tWk = lastValidWk < 20 ? 'bad' : lastValidWk < 40 ? 'warn' : '';
+                setRingProgress(ringH5.fl, lastValidH5, tH5);
+                setRingProgress(ringWk.fl, lastValidWk, tWk);
+                vH5.textContent = pct(lastValidH5);
+                tone(vH5, tH5);
+                vWk.textContent = pct(lastValidWk);
+                tone(vWk, tWk);
+              }
+              // 上行指令：sidecar 下一轮 tick 读走并执行
+              window.__AGY_MINIBAR.pendingSwitch = a.email;
+              renderPanel();
+            });
+          }
+          listEl.appendChild(row);
+        }
       }
-      listEl.appendChild(row);
     }
     const footEl = panel.querySelector('.p-foot');
     if (footEl) {
-      footEl.innerHTML = '';
-      const resetBtn = el('div', 'p-add', '⚡ 标为全账号已重置 (100%)');
-      resetBtn.title = '当全服或时间到了配额重置时，一键将所有离线账号校准为 100%';
-      resetBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        window.__AGY_MINIBAR.pendingResetQuotas = true;
-        resetBtn.textContent = '✓ 已校准为 100%';
-        setTimeout(() => { if (panel) renderPanel(); }, 400);
-      });
-      footEl.appendChild(resetBtn);
+      const resetJustDone = Date.now() - lastResetClickAt < 2500;
+      const wantText = resetJustDone ? '✓ 已将全账号校准为 100%' : '⚡ 标为全账号已重置 (100%)';
+      let resetBtn = footEl.querySelector('.p-add');
+      if (!resetBtn) {
+        footEl.innerHTML = '';
+        resetBtn = el('div', 'p-add', wantText);
+        resetBtn.title = '当官方提前/全服重置额度时，一键将所有离线账号的 5h 与周额度全部校准为 100%，并强刷当前账号云端额度';
+        resetBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          lastResetClickAt = Date.now();
+          window.__AGY_MINIBAR.pendingResetQuotas = true;
+          resetBtn.textContent = '✓ 已将全账号校准为 100%';
+        });
+        footEl.appendChild(resetBtn);
+      } else if (resetBtn.textContent !== wantText) {
+        resetBtn.textContent = wantText;
+      }
     }
   }
   let switchingTarget = '';
@@ -1183,19 +1195,25 @@
     }
 
     // 上行：pending 指令回传给 sidecar（含消费标记，避免 sidecar 重复执行）
+    const pendingSwitch = window.__AGY_MINIBAR.pendingSwitch || null;
+    const pendingCapture = window.__AGY_MINIBAR.pendingCapture === true;
+    const pendingResetQuotas = window.__AGY_MINIBAR.pendingResetQuotas === true;
+    if (pendingResetQuotas) window.__AGY_MINIBAR.pendingResetQuotas = false;
     return {
       ok: true,
       mounted: host.isConnected,
       convId: typeof x.convId === 'string' ? x.convId : '',
-      pendingSwitch: window.__AGY_MINIBAR.pendingSwitch || null,
-      pendingCapture: window.__AGY_MINIBAR.pendingCapture === true,
+      pendingSwitch,
+      pendingCapture,
+      pendingResetQuotas,
     };
   }
 
   window.__AGY_MINIBAR = {
     ver: VER, update, mount,
-    pendingSwitch: null,     // 页面 → sidecar：切换指令
-    pendingCapture: false,   // 页面 → sidecar：抓取当前凭据入库
+    pendingSwitch: null,       // 页面 → sidecar：切换指令
+    pendingCapture: false,     // 页面 → sidecar：抓取当前凭据入库
+    pendingResetQuotas: false, // 页面 → sidecar：校准离线账号配额为 100%
     unmount() { closeQuotaCard(); closeTokenCard(); try { host.remove(); } catch (_) {} },
     /* OAuth 登录确认条：登录完成后显示，点击抓取 token 入库（免 fetch 通道） */
     showLoginConfirm() {
