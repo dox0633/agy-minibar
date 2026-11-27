@@ -8,9 +8,11 @@
  * 3. 桌面端中文汉化     (app.asar dist/preload.js 独立注入，可随时卸载还原)
  * 4. 系统增强中心       (language_server / agy 0~4 档提示词精简 + 自动中文标题)
  */
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import {
   inspectAsarChinese,
@@ -29,7 +31,7 @@ const REPO_ROOT = path.resolve(__dirname, '..');
 
 function parseArgs(argv) {
   const opts = {
-    mode: 'auto', // 'auto' (--all) | 'status' | 'restore' | 'selective'
+    mode: 'auto', // 'auto' (--all) | 'status' | 'restore' | 'selective' | 'menu'
     plugin: false,
     rules: false,
     i18n: false,
@@ -47,6 +49,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '-h' || a === '--help') opts.help = true;
+    else if (a === '--menu') opts.mode = 'menu';
     else if (a === '--status') opts.mode = 'status';
     else if (a === '--restore' || a === '--uninstall') opts.mode = 'restore';
     else if (a === '--all') opts.mode = 'all';
@@ -260,11 +263,83 @@ function printHumanStatus(st) {
   }
 }
 
-export function runCli(argv = process.argv.slice(2)) {
+function isAntigravityRunningWin() {
+  if (process.platform !== 'win32') return false;
+  try {
+    const out = execFileSync('tasklist', ['/FI', 'IMAGENAME eq Antigravity.exe', '/NH'], {
+      encoding: 'utf8',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore']
+    });
+    return out.toLowerCase().includes('antigravity.exe');
+  } catch {
+    return false;
+  }
+}
+
+async function askQuestion(rl, promptText) {
+  return new Promise((resolve) => rl.question(promptText, resolve));
+}
+
+async function runInteractiveMenu() {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    console.log('============================================================');
+    console.log('  Antigravity MiniBar 一站式安装与升级修复工具');
+    console.log('  包含：MiniBar插件 / 全局规则 / 界面汉化 / 4档增强与中文标题');
+    console.log('============================================================');
+    console.log('');
+    console.log('  [1] 一键安装 / 升级后全量修复 (推荐)');
+    console.log('  [2] 仅查看当前状态');
+    console.log('  [3] 仅修复界面汉化与内核增强 (升级后常用)');
+    console.log('  [4] 还原客户端英文界面与 0 档原版内核');
+    console.log('  [0] 退出');
+    console.log('');
+    const raw = await askQuestion(rl, '请输入选项 [默认 1]: ');
+    const choice = (raw || '').trim() || '1';
+    if (choice === '0') return 0;
+
+    let targetArgs = null;
+    if (choice === '1') targetArgs = ['--all'];
+    else if (choice === '2') targetArgs = ['--status'];
+    else if (choice === '3') targetArgs = ['--i18n', '--enhance'];
+    else if (choice === '4') targetArgs = ['--restore'];
+    else {
+      console.log('[提示] 无效选项，已退出。');
+      return 1;
+    }
+
+    if (choice !== '2' && isAntigravityRunningWin()) {
+      console.log('');
+      console.log('[提示] 检测到 Antigravity.exe 仍在运行（包含后台/托盘进程），这会锁定 app.asar 导致汉化写入失败。');
+      const ans = await askQuestion(rl, '是否现在关闭 Antigravity.exe 后继续？[y/N]: ');
+      if (['y', 'yes'].includes(ans.trim().toLowerCase())) {
+        try {
+          execFileSync('taskkill', ['/IM', 'Antigravity.exe', '/F'], { windowsHide: true, stdio: 'ignore' });
+          await new Promise((r) => setTimeout(r, 800));
+          console.log('[完成] 已关闭 Antigravity.exe，继续执行...');
+        } catch (err) {
+          console.warn(`[警告] 关闭进程未完全成功: ${err.message}`);
+        }
+      }
+    }
+
+    console.log('');
+    return await runCli(targetArgs);
+  } finally {
+    rl.close();
+  }
+}
+
+export async function runCli(argv = process.argv.slice(2)) {
   const opts = parseArgs(argv);
   if (opts.help) {
     printHelp();
     return 0;
+  }
+
+  if (opts.mode === 'menu') {
+    return await runInteractiveMenu();
   }
 
   if (opts.mode === 'status') {
@@ -359,5 +434,5 @@ export function runCli(argv = process.argv.slice(2)) {
 
 const isEntry = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
 if (isEntry) {
-  process.exitCode = runCli();
+  runCli().then((code) => { process.exitCode = code; });
 }

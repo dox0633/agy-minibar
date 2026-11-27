@@ -1,7 +1,7 @@
 {
   "name": "agy-minibar",
   "displayName": "Antigravity MiniBar",
-  "version": "1.9.0",
+  "version": "1.9.1",
   "description": "输入框正下方的一行极简实时状态条：全系规范化「图标+英文简写+数值」（TOK、TPS 呼吸闪电、CTX 上下文、HIT 缓存命中、ACC 账号、5H/WK 双环额度）、Token 悬浮卡片（日月周三维统计）、零跳动平滑账号热切换及高保真配额浮层卡片。内置可选 toolkit/ 一键工具包（全局规则 + 桌面端汉化 + 4档提示词与中文标题增强），零依赖。",
   "author": {
     "name": "agy-minibar contributors"
