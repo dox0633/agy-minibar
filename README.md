@@ -2,7 +2,7 @@
 **输入框正下方的一行极简实时状态条** —— 在你打字的地方，一眼看全当前会话的健康度。
 English | [简体中文](#功能一览)
 [![CI](https://github.com/dox0633/agy-minibar/actions/workflows/ci.yml/badge.svg)](https://github.com/dox0633/agy-minibar/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-1.8.8-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.9.0-blue)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)](#安装)
 [![Antigravity](https://img.shields.io/badge/host-Antigravity%202.0%20Desktop-orange)](#适用对象)
@@ -101,6 +101,23 @@ git clone https://github.com/dox0633/agy-minibar.git ~/.gemini/config/plugins/ag
 ```text
 把 https://github.com/dox0633/agy-minibar 克隆到 ~/.gemini/config/plugins/agy-minibar 并启用插件
 ```
+### 方式三：一站式安装（插件 + 全局规则 + 桌面端汉化 + 4档增强与中文标题）
+克隆本仓库后，进入插件目录执行一次脚本即可装齐全部四项功能（Windows 用户也可直接双击 `toolkit\一键安装与修复.bat`）：
+```powershell
+cd "$env:USERPROFILE\.gemini\config\plugins\agy-minibar"
+node toolkit/setup.mjs --all
+```
+- **包含内容**：
+  1. 启用 `agy-minibar` 插件（写入 `~/.gemini/config/config.json`）
+  2. 部署简体中文全局规则至 `~/.gemini/config/rules/global-rules.md`（若已有自定义修改则保留，不强行覆盖）
+  3. 为 Antigravity 桌面端 `app.asar` 注入纯 DOM 中文汉化（可随时还原，不改其他模块）
+  4. 为桌面端 (`language_server.exe`) 与 CLI (`agy.exe`) 应用 **4 档系统提示词精简+防幻觉** 及 **自动中文会话/章节标题**（自动留存 `.orig.bak` 备份）
+- **常用子命令**：
+  - 查看当前状态（含客户端升级覆盖检测）：`node toolkit/setup.mjs --status`
+  - 客户端自动更新覆盖后一键重新打补丁：`node toolkit/setup.mjs --i18n --enhance`
+  - 仅按需装单项：`node toolkit/setup.mjs --rules` / `--i18n` / `--enhance --tier 4 --title on`
+  - 还原英文界面与 0 档原版内核：`node toolkit/setup.mjs --restore`
+
 ### 启用
 1. 重启 Antigravity（或打开左侧 **Customizations → Installed**，找到 `agy-minibar` 并开启）
 2. 状态条自动出现在输入框正下方（首次出现约需 2~3 秒）
@@ -155,14 +172,19 @@ git clone https://github.com/dox0633/agy-minibar.git ~/.gemini/config/plugins/ag
 | [CHANGELOG](CHANGELOG.md) | 每个版本的完整变更记录 |
 | [CONTRIBUTING](CONTRIBUTING.md) | 开发环境、强制约束、提交与发布流程 |
 | [SECURITY](SECURITY.md) | 漏洞报告渠道、安全模型与数据边界 |
+| [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md) | `toolkit/` 整合组件 MIT 上游来源与致谢 |
 ## 更新
 ```powershell
 git -C "$env:USERPROFILE\.gemini\config\plugins\agy-minibar" pull --ff-only
 ```
-拉取后重启 Antigravity 即可；页面端注入脚本带版本号自愈，旧版本残留会被自动清理。
+拉取后重启 Antigravity 即可；页面端注入脚本带版本号自愈，旧版本残留会被自动清理。若客户端官方升级覆盖了汉化或内核，再补跑一次 `node toolkit/setup.mjs --i18n --enhance` 即可恢复。
 ## 卸载
 1. **Customizations → Installed** 中关闭 `agy-minibar`
-2. 删除插件目录：
+2. 若使用过 `toolkit/` 汉化或内核增强，可先还原英文界面与 0 档内核：
+```powershell
+node "$env:USERPROFILE\.gemini\config\plugins\agy-minibar\toolkit\setup.mjs" --restore
+```
+3. 删除插件目录：
 ```powershell
 Remove-Item -Recurse -Force "$env:USERPROFILE\.gemini\config\plugins\agy-minibar"
 ```

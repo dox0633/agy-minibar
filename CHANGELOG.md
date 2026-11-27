@@ -15,6 +15,18 @@
 
 
 
+## [1.9.0] - 2026-11-27
+
+### 整合可选 `toolkit/` 一站式工具包（全局规则 + 桌面端汉化 + 系统增强中心）
+
+- **插件本体继续保持零侵入纯净运行**：`sidecars/bar/` 代码无改动，升级 Antigravity 时插件本体与个人配置依然不会被覆盖。
+- **新增独立 `toolkit/` 工具包（纯 Node.js 内置模块，零第三方依赖）**：
+  - **全局规则（`toolkit/rules/global-rules.md`）**：一键部署带 `trigger: always_on` 的 5 条简体中文工程约束规则至 `~/.gemini/config/rules/global-rules.md`（存在自定义改动时默认保留，不强行覆盖）。
+  - **桌面端中文汉化（`toolkit/i18n/` + `toolkit/lib/asar-engine.mjs`）**：基于 `Antigravity-Chinese-Localization v2.34.0`，仅向 `app.asar` 的 `dist/preload.js` 写入带起止标记的独立汉化块，重打包自动校验全部未修改文件 SHA-256，可随时一键还原英文原版。
+  - **精简版系统增强中心（`toolkit/lib/enhance-core.mjs`）**：剥离上下文解锁、代理等无关耦合，专注提供 Desktop (`language_server.exe`) 与 CLI (`agy.exe`) 的 **0~4 档系统提示词精简与防幻觉护栏（默认 4 档）**、**自动中文会话/章节标题**、`.orig.bak` 纯净备份与 Windows `rename-swap` 热替换。
+  - **统一入口**：提供 `node toolkit/setup.mjs`（支持 `--all` / `--status` / `--restore` 及各单项开关）与 Windows 双击入口 `toolkit/一键安装与修复.bat`，方便重装环境或官方客户端升级后一键恢复。
+- **补充开源致谢**：新增 `THIRD_PARTY_NOTICES.md`，标明 MIT 上游来源。
+
 ## [1.8.8] - 2026-11-26
 
 ### 修复「标为全账号已重置 (100%)」指令漏传与面板点击吞事件问题
